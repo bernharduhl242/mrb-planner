@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Mr. B's Methode"/>
+<title>Mr. B's Methode</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --ink:#1a1a18;--ink-light:#4a4a42;--ink-faint:#9a9a8e;
+  --paper:#f5f2eb;--paper-warm:#ede9de;--paper-grid:#d8d3c4;
+  --accent:#2d5016;--accent-light:#4a7a28;--accent-faint:#e8f0e0;
+  --red:#8b1a1a;--gold:#8b6914;--border:#c8c2b0;
+}
+html,body{height:100%;font-family:'Instrument Sans',sans-serif;background:#2a2820;}
+input,select,button{font-family:inherit;}
+input:focus{outline:none;}
+button:focus{outline:none;}
+select:focus{outline:none;}
+::-webkit-scrollbar{width:4px;height:4px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useRef, useReducer } = React;
+
+// ── Storage (localStorage for cross-device via export/import) ──
+const STORAGE_KEY = 'mrb-methode-v1';
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return null;
+}
+function saveState(state) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+}
+
+// ── Helpers ──
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const DAYS = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+const DAY_OPTS = ['','I','II','III','D','X'];
+
+function getMonday(d) {
+  const dt = new Date(d); const day = dt.getDay();
+  dt.setDate(dt.getDate()+(day===0?-6:1-day)); dt.setHours(0,0,0,0); return dt;
+}
+function fmtDate(d) { return new Date(d).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function getWeekNum(d) {
+  const dt = new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+  dt.setUTCDate(dt.getUTCDate()+4-(dt.getUTCDay()||7));
+  const y = new Date(Date.UTC(dt.getUTCFullYear(),0,1));
+  return Math.ceil((((dt-y)/86400000)+1)/7);
+}
+function fmtWeek(monday) {
+  const m = new Date(monday); const s = new Date(m); s.setDate(m.getDate()+6);
+  return `KW ${getWeekNum(m)} · ${fmtDate(m)} – ${fmtDate(s)}`;
+}
+function makeTask(overrides={}) {
+  return { id:uid(), aktivitat:'', typ:'', days:Array(7).fill(null).map(()=>({priority:'',carried:false})), name:'', completed:false, ...overrides };
+}
+function emptyState() {
+  const recurring = [
+    makeTask({aktivitat:'TA prüfen · Check task list', days:DAYS.map((_,i)=>i<5?{priority:'I',carried:false}:{priority:'',carried:false})}),
+    makeTask({aktivitat:'Z · Ziele überprüfen', days:DAYS.map((_,i)=>i===4?{priority:'I',carried:false}:{priority:'',carried:false})}),
+  ];
+  const z = Array(12).fill(null).map(()=>({id:uid(),text:''}));
+  const impulse = Array(6).fill(null).map(()=>({id:uid(),text:''}));
+  const pa = {
+    monthly:  { tasks:[{id:uid(),text:'Kreditkarten bezahlen',done:false},{id:uid(),text:'Geburtstage prüfen',done:false}], lastReset:null },
+    sixmonth: { tasks:[{id:uid(),text:'Versicherungen prüfen',done:false}], lastReset:null },
+    yearly:   { tasks:[{id:uid(),text:'Z · Ziele überprüfen',done:false}], lastReset:null },
+  };
+  return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, pa };
+}
+
+// ── SVG Icons ──
+function DelegSVG({ color='#8b6914', size=16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{display:'block'}}>
+      <line x1="8" y1="2" x2="8" y2="14" stroke={color} strokeWidth="1.8" strokeLinecap="round"/>
+      <line x1="2.5" y1="13.5" x2="13.5" y2="2.5" stroke={color} strokeWidth="1.5" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+// ── Day Cell ──
+function DayCell({ dayData, onCycle, onCarry }) {
+  const { priority, carried } = dayData;
+  const pressTimer = useRef(null);
+  const didLongPress = useRef(false);
+  function startPress() { didLongPress.current=false; pressTimer.current=setTimeout(()=>{didLongPress.current=true;onCarry();},500); }
+  function endPress() { clearTimeout(pressTimer.current); }
+  function handleClick() { if(!didLongPress.current) onCycle(); }
+  const isX = priority==='X';
+  const color = carried?'var(--red)':isX?'#5a5a52':'var(--accent)';
+  return (
+    <td style={{border:'1px solid var(--paper-grid)',padding:0,verticalAlign:'middle',background:isX?'rgba(90,90,82,0.08)':'inherit'}}>
+      <div onClick={handleClick} onContextMenu={e=>{e.preventDefault();onCarry();}}
+        onMouseDown={startPress} onMouseUp={endPress} onMouseLeave={endPress}
+        onTouchStart={startPress} onTouchEnd={endPress} onTouchCancel={endPress}
+        style={{width:46,height:32,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',userSelect:'none'}}>
+        {priority==='D'?<DelegSVG color={carried?'#8b1a1a':'#8b6914'}/>:
+         isX?<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.9rem',fontWeight:'bold',color,lineHeight:1}}>✕</span>:
+         priority?<>
+           <span style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.85rem',fontWeight:'bold',color,lineHeight:1}}>{priority}</span>
+           {carried&&<div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:20,height:20,border:'1.5px solid #8b1a1a',borderRadius:'50%',pointerEvents:'none'}}/>}
+         </>:null}
+      </div>
+    </td>
+  );
+}
+
+// ── Task Row ──
+function TaskRow({ task, onUpdate, onDelete, onToggleComplete, isRecurring }) {
+  const rowBg = isRecurring?(task.completed?'rgba(232,240,224,0.45)':'var(--accent-faint)'):(task.completed?'rgba(245,242,235,0.45)':undefined);
+  function cycleDay(d) {
+    const cur=task.days[d].priority;
+    const next=DAY_OPTS[(DAY_OPTS.indexOf(cur)+1)%DAY_OPTS.length];
+    onUpdate({...task,days:task.days.map((dd,i)=>i===d?{priority:next,carried:false}:dd)});
+  }
+  function carryDay(d) {
+    if(!task.days[d].priority) return;
+    onUpdate({...task,days:task.days.map((dd,i)=>i===d?{...dd,carried:!dd.carried}:dd)});
+  }
+  function cycleW() {
+    const opts=['','I','II','III']; const next=opts[(opts.indexOf(task.typ)+1)%opts.length];
+    onUpdate({...task,typ:next});
+  }
+  return (
+    <tr style={{opacity:task.completed?0.45:1}}>
+      <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:200}}>
+        <input type="text" value={task.aktivitat} placeholder="Aktivität..."
+          onChange={e=>onUpdate({...task,aktivitat:e.target.value})}
+          style={{width:'100%',border:'none',background:'transparent',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',color:'var(--ink)',padding:'5px 8px',textDecoration:task.completed?'line-through':'none'}}/>
+      </td>
+      <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:42}}>
+        <div onClick={cycleW} style={{display:'flex',alignItems:'center',justifyContent:'center',height:32,cursor:'pointer'}}>
+          {task.typ&&<span style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.85rem',color:'var(--gold)'}}>{task.typ}</span>}
+        </div>
+      </td>
+      {task.days.map((dd,d)=>(
+        <DayCell key={d} dayData={dd} onCycle={()=>cycleDay(d)} onCarry={()=>carryDay(d)}/>
+      ))}
+      <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:70}}>
+        <input type="text" value={task.name||''} placeholder="Name..."
+          onChange={e=>onUpdate({...task,name:e.target.value})}
+          style={{width:'100%',border:'none',background:'transparent',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',color:'var(--ink)',padding:'5px 8px'}}/>
+      </td>
+      <td style={{border:'1px solid var(--paper-grid)',padding:'0 4px',background:rowBg,width:44}}>
+        <div style={{display:'flex',gap:3}}>
+          <button onClick={onToggleComplete} title={task.completed?'Wiederherstellen':'Erledigt'}
+            style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.7rem',borderRadius:2}}>
+            {task.completed?'↩':'✓'}
+          </button>
+          {!isRecurring&&(
+            <button onClick={onDelete} title="Löschen"
+              style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.8rem',borderRadius:2}}>×</button>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function GridHead() {
+  const th=(label,extra={})=>(
+    <th key={label} style={{background:'var(--ink)',color:'var(--paper)',padding:'6px 8px',textAlign:'center',fontWeight:500,letterSpacing:'0.1em',fontSize:'0.65rem',border:'1px solid var(--ink)',whiteSpace:'nowrap',...extra}}>{label}</th>
+  );
+  return (
+    <thead><tr>
+      {th('Aktivität',{textAlign:'left',minWidth:200})}
+      {th('W',{minWidth:42})}
+      {DAYS.map(d=>th(d,{minWidth:46}))}
+      {th('N · Name',{minWidth:70})}
+      {th('',{width:44})}
+    </tr></thead>
+  );
+}
+
+function TaskGrid({ tasks, onUpdate, onDelete, onToggleComplete, isRecurring=false }) {
+  return (
+    <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem'}}>
+        <GridHead/>
+        <tbody>
+          {tasks.length===0?(
+            <tr><td colSpan={11} style={{border:'1px solid var(--paper-grid)',padding:24,textAlign:'center',fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',letterSpacing:'0.06em'}}>
+              Keine Aufgaben
+            </td></tr>
+          ):tasks.map(t=>(
+            <TaskRow key={t.id} task={t} isRecurring={isRecurring}
+              onUpdate={onUpdate} onDelete={()=>onDelete(t.id)} onToggleComplete={()=>onToggleComplete(t.id)}/>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ── UI Components ──
+function Btn({children, onClick, variant='default', style={}}) {
+  const base={fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',letterSpacing:'0.1em',padding:'6px 14px',border:'1.5px solid var(--border)',background:'transparent',color:'var(--ink-light)',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all 0.12s'};
+  const variants={
+    primary:{background:'var(--ink)',color:'var(--paper)',borderColor:'var(--ink)'},
+    danger:{borderColor:'var(--red)',color:'var(--red)'},
+    accent:{borderColor:'var(--accent)',color:'var(--accent)'},
+    gold:{borderColor:'var(--gold)',color:'var(--gold)'},
+  };
+  return <button onClick={onClick} style={{...base,...(variants[variant]||{}),...style}}>{children}</button>;
+}
+
+function SectionHeader({title, meta, children}) {
+  return (
+    <div style={{display:'flex',alignItems:'baseline',gap:16,marginBottom:20,paddingBottom:10,borderBottom:'1.5px solid var(--ink)',flexWrap:'wrap'}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.4rem',color:'var(--ink)'}}>{title}</div>
+      {meta&&<div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',color:'var(--ink-faint)',letterSpacing:'0.1em'}}>{meta}</div>}
+      <div style={{marginLeft:'auto',display:'flex',gap:8,flexWrap:'wrap'}}>{children}</div>
+    </div>
+  );
+}
+
+function SubLabel({children, badge}) {
+  return (
+    <div style={{marginBottom:8,display:'flex',alignItems:'center',gap:8}}>
+      <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',letterSpacing:'0.1em',textTransform:'uppercase',color:'var(--ink-faint)'}}>{children}</span>
+      {badge&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--accent)',padding:'1px 5px',background:'var(--accent-faint)',borderRadius:2}}>{badge}</span>}
+    </div>
+  );
+}
+
+function Toast({message}) {
+  return message?(
+    <div style={{position:'fixed',bottom:24,right:24,background:'var(--ink)',color:'var(--paper)',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',letterSpacing:'0.08em',padding:'10px 18px',borderRadius:3,zIndex:200,boxShadow:'0 4px 20px rgba(0,0,0,0.3)'}}>
+      {message}
+    </div>
+  ):null;
+}
+
+// ── Add Task Modal ──
+function AddTaskModal({open, target, onClose, onSave}) {
+  const [aktivitat,setAktivitat]=useState('');
+  const [typ,setTyp]=useState('');
+  const [day,setDay]=useState('');
+  const [priority,setPriority]=useState('');
+  const [name,setName]=useState('');
+  const [zaWeek,setZaWeek]=useState(0);
+  useEffect(()=>{if(open){setAktivitat('');setTyp('');setDay('');setPriority('');setName('');setZaWeek(0);}},[open]);
+  function save() {
+    if(!aktivitat.trim()) return;
+    const days=Array(7).fill(null).map(()=>({priority:'',carried:false}));
+    if(day!==''&&priority) days[parseInt(day)].priority=priority;
+    onSave({aktivitat:aktivitat.trim(),typ,days,name:name.trim(),zaWeek});
+  }
+  const prioBtn=(p)=>(
+    <button key={p} onClick={()=>setPriority(priority===p?'':p)}
+      style={{flex:1,padding:8,border:'1.5px solid',borderColor:priority===p?(p==='I'?'var(--accent)':p==='II'?'var(--gold)':'var(--red)'):'var(--border)',background:priority===p?(p==='I'?'#e8f5e0':p==='II'?'#fff0e0':'#fce8e8'):'transparent',cursor:'pointer',fontFamily:"'DM Serif Display',serif",fontSize:'1rem',borderRadius:2,color:priority===p?(p==='I'?'var(--accent)':p==='II'?'var(--gold)':'var(--red)'):'var(--ink-faint)'}}>
+      {p}
+    </button>
+  );
+  const fLabel=(txt)=><label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:5}}>{txt}</label>;
+  const fInput=(props)=><input {...props} style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2,...(props.style||{})}}/>;
+  const fSelect=(props)=><select {...props} style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}/>;
+  if(!open) return null;
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(26,26,24,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'var(--paper)',border:'1.5px solid var(--ink)',padding:24,minWidth:300,maxWidth:420,width:'90%',boxShadow:'0 2px 20px rgba(26,26,24,0.15)',borderRadius:3}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.1rem',marginBottom:16,color:'var(--ink)',borderBottom:'1px solid var(--border)',paddingBottom:10}}>
+          {target==='za'?'Neue ZA-Aufgabe':'Neue Aufgabe'}
+        </div>
+        <div style={{marginBottom:14}}>{fLabel('Aktivität')}{fInput({value:aktivitat,onChange:e=>setAktivitat(e.target.value),placeholder:'Aufgabe beschreiben...',autoFocus:true,onKeyDown:e=>e.key==='Enter'&&save()})}</div>
+        <div style={{marginBottom:14}}>{fLabel('Typ (W)')}{fSelect({value:typ,onChange:e=>setTyp(e.target.value),children:[<option key="" value="">— Noch nicht geplant —</option>,<option key="I" value="I">I · Priorität I</option>,<option key="II" value="II">II · Priorität II</option>,<option key="III" value="III">III · Priorität III</option>]})}</div>
+        {target==='ta'&&<div style={{marginBottom:14}}>{fLabel('Tag planen')}{fSelect({value:day,onChange:e=>setDay(e.target.value),children:[<option key="" value="">— Woche (W) —</option>,...DAYS.map((d,i)=><option key={i} value={i}>{d}</option>)]})}</div>}
+        {target==='za'&&<div style={{marginBottom:14}}>{fLabel('Woche (ZA)')}{fSelect({value:zaWeek,onChange:e=>setZaWeek(parseInt(e.target.value)),children:[0,1,2,3].map(w=><option key={w} value={w}>Woche {w+1}{w===0?' (nächste)':''}</option>)})}</div>}
+        <div style={{marginBottom:14}}>{fLabel('Priorität')}<div style={{display:'flex',gap:8}}>{['I','II','III'].map(prioBtn)}</div></div>
+        <div style={{marginBottom:14}}>{fLabel('N · Delegiert an')}{fInput({value:name,onChange:e=>setName(e.target.value),placeholder:'Name (optional)'})}</div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:18}}>
+          <Btn onClick={onClose}>Abbrechen</Btn>
+          <Btn onClick={save} variant="primary">Speichern</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Export / Import Modal ──
+function DataModal({open, onClose, state, onImport}) {
+  const [importText,setImportText]=useState('');
+  const [importError,setImportError]=useState('');
+  const [view,setView]=useState('export');
+
+  function doExport() {
+    const json=JSON.stringify(state,null,2);
+    const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download=`mrb-methode-backup-${fmtDate(new Date()).replace(/\./g,'-')}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+  function doImport() {
+    try {
+      const parsed=JSON.parse(importText);
+      if(!parsed.weekStart||!parsed.ta) throw new Error('Ungültiges Format');
+      onImport(parsed);
+      onClose();
+    } catch(e) { setImportError('Ungültige Datei · Bitte eine gültige Backup-Datei einfügen'); }
+  }
+  if(!open) return null;
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(26,26,24,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'var(--paper)',border:'1.5px solid var(--ink)',padding:24,minWidth:300,maxWidth:480,width:'90%',boxShadow:'0 2px 20px rgba(26,26,24,0.15)',borderRadius:3}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.1rem',marginBottom:16,color:'var(--ink)',borderBottom:'1px solid var(--border)',paddingBottom:10}}>
+          Daten · Export & Import
+        </div>
+        <div style={{display:'flex',gap:4,marginBottom:20}}>
+          {['export','import'].map(v=>(
+            <button key={v} onClick={()=>setView(v)}
+              style={{flex:1,padding:'7px 0',fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',letterSpacing:'0.12em',textTransform:'uppercase',border:'1.5px solid var(--border)',background:view===v?'var(--ink)':'transparent',color:view===v?'var(--paper)':'var(--ink-faint)',cursor:'pointer',borderRadius:2}}>
+              {v==='export'?'↓ Export':'↑ Import'}
+            </button>
+          ))}
+        </div>
+        {view==='export'&&(
+          <div>
+            <p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-light)',marginBottom:16,lineHeight:1.6}}>
+              Exportiert alle Daten als JSON-Datei. Nutze diese Datei als Backup oder um Daten auf ein anderes Gerät zu übertragen.
+            </p>
+            <Btn variant="primary" onClick={doExport} style={{width:'100%',textAlign:'center'}}>↓ Backup herunterladen</Btn>
+          </div>
+        )}
+        {view==='import'&&(
+          <div>
+            <p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-light)',marginBottom:12,lineHeight:1.6}}>
+              JSON-Inhalt einer Backup-Datei hier einfügen. Achtung: Aktuelle Daten werden überschrieben.
+            </p>
+            <textarea value={importText} onChange={e=>{setImportText(e.target.value);setImportError('');}}
+              placeholder="JSON hier einfügen..."
+              style={{width:'100%',height:120,fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'8px 10px',borderRadius:2,resize:'vertical',marginBottom:8}}/>
+            {importError&&<p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--red)',marginBottom:8}}>{importError}</p>}
+            <Btn variant="danger" onClick={doImport} style={{width:'100%',textAlign:'center'}}>↑ Daten importieren</Btn>
+          </div>
+        )}
+        <div style={{marginTop:16,display:'flex',justifyContent:'flex-end'}}>
+          <Btn onClick={onClose}>Schließen</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── TA Panel ──
+function TAPanel({state, dispatch, onAddTask}) {
+  const ws=new Date(state.weekStart);
+  const total=state.ta.length, done=state.ta.filter(t=>t.completed).length;
+  return (
+    <div>
+      <SectionHeader title="Tages-Aktivitäten" meta={fmtWeek(ws)}>
+        <Btn onClick={()=>dispatch({type:'ADD_RECURRING'})}>+ Wiederkehrend</Btn>
+        <Btn variant="primary" onClick={()=>onAddTask('ta')}>+ Aufgabe</Btn>
+      </SectionHeader>
+      <div style={{display:'flex',gap:20,padding:'10px 0',marginBottom:16}}>
+        {[['Gesamt',total],['Offen',total-done],['Erledigt',done],['Delegiert',state.ta.filter(t=>t.name).length]].map(([l,v])=>(
+          <div key={l} style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)',letterSpacing:'0.08em'}}>
+            <strong style={{fontSize:'1rem',color:'var(--ink)',display:'block',fontFamily:"'DM Serif Display',serif"}}>{v}</strong>{l}
+          </div>
+        ))}
+      </div>
+      <SubLabel badge="Wiederkehrend">System-Routinen</SubLabel>
+      <div style={{marginBottom:20}}>
+        <TaskGrid tasks={state.recurring} isRecurring
+          onUpdate={t=>dispatch({type:'UPDATE_RECURRING',task:t})}
+          onDelete={id=>dispatch({type:'DELETE_RECURRING',id})}
+          onToggleComplete={id=>dispatch({type:'TOGGLE_RECURRING',id})}/>
+      </div>
+      <SubLabel>Aufgaben dieser Woche</SubLabel>
+      <TaskGrid tasks={state.ta}
+        onUpdate={t=>dispatch({type:'UPDATE_TA',task:t})}
+        onDelete={id=>dispatch({type:'DELETE_TA',id})}
+        onToggleComplete={id=>dispatch({type:'TOGGLE_TA',id})}/>
+      <div style={{marginTop:12}}>
+        <Btn variant="danger" onClick={()=>dispatch({type:'END_WEEK'})}>Woche abschließen →</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ── ZA Panel ──
+function ZAPanel({state, dispatch, onAddTask}) {
+  return (
+    <div>
+      <SectionHeader title="Zukunfts-Aktivitäten" meta="Nächste 4 Wochen">
+        <Btn variant="primary" onClick={()=>onAddTask('za')}>+ Aufgabe</Btn>
+      </SectionHeader>
+      <div style={{display:'flex',flexDirection:'column',gap:24}}>
+        {[0,1,2,3].map(w=>{
+          const ws=new Date(state.weekStart); ws.setDate(ws.getDate()+(w+1)*7);
+          return (
+            <div key={w} style={{border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden'}}>
+              <div style={{background:'var(--paper-warm)',padding:'10px 16px',display:'flex',alignItems:'center',gap:12,borderBottom:'1px solid var(--border)'}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',color:'var(--ink)',flex:1}}>Woche {w+1}</div>
+                <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>{fmtWeek(ws)}</div>
+                <button onClick={()=>dispatch({type:'PROMOTE_WEEK',weekIdx:w})}
+                  style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.1em',padding:'5px 12px',background:'var(--accent)',color:'var(--paper)',border:'none',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                  → TA übertragen
+                </button>
+              </div>
+              <div style={{padding:12}}>
+                <TaskGrid tasks={state.za[w]||[]}
+                  onUpdate={t=>dispatch({type:'UPDATE_ZA',task:t,weekIdx:w})}
+                  onDelete={id=>dispatch({type:'DELETE_ZA',id,weekIdx:w})}
+                  onToggleComplete={id=>dispatch({type:'TOGGLE_ZA',id,weekIdx:w})}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Z Panel ──
+function ZPanel({state, dispatch}) {
+  return (
+    <div>
+      <SectionHeader title="Ziele · Motivation" meta="Persönliche Ziele"/>
+      <div style={{width:'100%',minHeight:500,background:'var(--paper)',border:'1px solid var(--border)',padding:20,backgroundImage:'linear-gradient(var(--paper-grid) 1px,transparent 1px),linear-gradient(90deg,var(--paper-grid) 1px,transparent 1px)',backgroundSize:'24px 24px'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:4}}>
+          {state.z.map((entry,i)=>(
+            <div key={entry.id} style={{display:'flex',gap:10,alignItems:'flex-start',minHeight:28}}>
+              <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.78rem',color:'var(--ink-faint)',minWidth:22,paddingTop:5,textAlign:'right',userSelect:'none'}}>{i+1}</div>
+              <input value={entry.text} placeholder="Ziel oder Gedanke..."
+                onChange={e=>dispatch({type:'UPDATE_Z',i,text:e.target.value})}
+                onKeyDown={e=>e.key==='Enter'&&dispatch({type:'ADD_Z'})}
+                style={{flex:1,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:'var(--ink)',padding:'4px 6px',lineHeight:1.6}}/>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{marginTop:10}}><Btn onClick={()=>dispatch({type:'ADD_Z'})}>+ Eintrag hinzufügen</Btn></div>
+    </div>
+  );
+}
+
+// ── PA Panel ──
+function PAPanel({state, dispatch}) {
+  const cardStyle={border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden',marginBottom:0};
+  const cardHeader=(title,sub)=>(
+    <div style={{background:'var(--ink)',color:'var(--paper)',padding:'10px 16px',display:'flex',alignItems:'center',gap:12}}>
+      <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',flex:1}}>{title}</div>
+      <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',color:'var(--ink-faint)',letterSpacing:'0.1em'}}>{sub}</div>
+    </div>
+  );
+  const intervals=[
+    {key:'monthly', label:'Monatlich',   badge:'Jeden Monat',    badgeColor:'#2040a0',badgeBg:'#e8f0ff'},
+    {key:'sixmonth',label:'Halbjährlich',badge:'Alle 6 Monate',  badgeColor:'#804010',badgeBg:'#fff0e0'},
+    {key:'yearly',  label:'Jährlich',    badge:'Einmal im Jahr', badgeColor:'var(--accent)',badgeBg:'var(--accent-faint)'},
+  ];
+  return (
+    <div>
+      <SectionHeader title="Periodische Aktivitäten" meta="Impulse · Wiederkehrende Aufgaben"/>
+      <div style={{display:'flex',flexDirection:'column',gap:32}}>
+        <div style={cardStyle}>
+          {cardHeader('Impulse','Motivation · Positive Gedanken')}
+          <div style={{padding:16,background:'var(--paper)'}}>
+            <div style={{width:'100%',minHeight:200,background:'var(--paper)',border:'1px solid var(--border)',padding:16,backgroundImage:'linear-gradient(var(--paper-grid) 1px,transparent 1px),linear-gradient(90deg,var(--paper-grid) 1px,transparent 1px)',backgroundSize:'24px 24px'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {state.impulse.map((entry,i)=>(
+                  <div key={entry.id} style={{display:'flex',alignItems:'center',gap:10,minHeight:28}}>
+                    <span style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.85rem',color:'var(--ink-faint)',minWidth:22,textAlign:'right',userSelect:'none'}}>{i+1}</span>
+                    <input value={entry.text} placeholder="Positiver Impuls oder Gedanke..."
+                      onChange={e=>dispatch({type:'UPDATE_IMPULSE',i,text:e.target.value})}
+                      onKeyDown={e=>e.key==='Enter'&&dispatch({type:'ADD_IMPULSE'})}
+                      style={{flex:1,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.9rem',color:'var(--ink)',padding:'4px 6px'}}/>
+                    <button onClick={()=>dispatch({type:'DELETE_IMPULSE',i})}
+                      style={{width:20,height:20,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.75rem',borderRadius:2}}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{marginTop:10}}><Btn onClick={()=>dispatch({type:'ADD_IMPULSE'})}>+ Impuls hinzufügen</Btn></div>
+          </div>
+        </div>
+        <div style={cardStyle}>
+          {cardHeader('PA-M · Periodische Aufgaben','Monatlich · Halbjährlich · Jährlich')}
+          <div style={{padding:16,background:'var(--paper)'}}>
+            {intervals.map(({key,label,badge,badgeColor,badgeBg},ii)=>(
+              <div key={key} style={{marginBottom:ii<2?24:0}}>
+                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingBottom:8,borderBottom:'1px solid var(--paper-grid)',flexWrap:'wrap'}}>
+                  <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',letterSpacing:'0.1em',textTransform:'uppercase',color:'var(--ink)',flex:1}}>{label}</span>
+                  <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',padding:'2px 8px',borderRadius:10,background:badgeBg,color:badgeColor}}>{badge}</span>
+                  {state.pa[key].lastReset&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',color:'var(--ink-faint)'}}>Zuletzt: {fmtDate(new Date(state.pa[key].lastReset))}</span>}
+                  <button onClick={()=>{if(window.confirm(`Alle ${label.toLowerCase()} Aufgaben zurücksetzen?`)) dispatch({type:'RESET_PA',key});}}
+                    style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',letterSpacing:'0.1em',padding:'3px 10px',border:'1.5px solid var(--gold)',background:'transparent',color:'var(--gold)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>↺ Zurücksetzen</button>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                  {state.pa[key].tasks.map((task,ti)=>(
+                    <div key={task.id} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 8px',borderRadius:2}}>
+                      <input type="checkbox" checked={task.done} onChange={e=>dispatch({type:'TOGGLE_PA_TASK',key,ti,done:e.target.checked})}
+                        style={{width:18,height:18,accentColor:'var(--accent)',cursor:'pointer',flexShrink:0}}/>
+                      <input value={task.text} placeholder="Aufgabe..." onChange={e=>dispatch({type:'UPDATE_PA_TASK',key,ti,text:e.target.value})}
+                        style={{flex:1,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:task.done?'var(--ink-faint)':'var(--ink)',textDecoration:task.done?'line-through':'none',padding:0}}/>
+                      <button onClick={()=>dispatch({type:'DELETE_PA_TASK',key,ti})}
+                        style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.7rem',borderRadius:2}}>×</button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{marginTop:6}}>
+                  <Btn style={{borderStyle:'dashed',fontSize:'0.62rem',padding:'3px 10px'}} onClick={()=>dispatch({type:'ADD_PA_TASK',key})}>+ Aufgabe</Btn>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Reducer ──
+function reducer(state, action) {
+  let next;
+  switch(action.type) {
+    case 'LOAD': return {...action.state};
+    case 'ADD_TA': return {...state,ta:[...state.ta,makeTask(action.task)]};
+    case 'UPDATE_TA': return {...state,ta:state.ta.map(t=>t.id===action.task.id?action.task:t)};
+    case 'DELETE_TA': return {...state,ta:state.ta.filter(t=>t.id!==action.id)};
+    case 'TOGGLE_TA': return {...state,ta:state.ta.map(t=>t.id===action.id?{...t,completed:!t.completed}:t)};
+    case 'ADD_RECURRING': return {...state,recurring:[...state.recurring,makeTask()]};
+    case 'UPDATE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.task.id?action.task:t)};
+    case 'DELETE_RECURRING': return {...state,recurring:state.recurring.filter(t=>t.id!==action.id)};
+    case 'TOGGLE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.id?{...t,completed:!t.completed}:t)};
+    case 'ADD_ZA': { const za=[...state.za]; za[action.weekIdx]=[...(za[action.weekIdx]||[]),makeTask(action.task)]; return {...state,za}; }
+    case 'UPDATE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.task.id?action.task:t); return {...state,za}; }
+    case 'DELETE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).filter(t=>t.id!==action.id); return {...state,za}; }
+    case 'TOGGLE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.id?{...t,completed:!t.completed}:t); return {...state,za}; }
+    case 'PROMOTE_WEEK': {
+      const promoted=(state.za[action.weekIdx]||[]).map(t=>({...t,days:Array(7).fill(null).map(()=>({priority:'',carried:false}))}));
+      const za=[...state.za]; za[action.weekIdx]=[];
+      return {...state,ta:[...state.ta,...promoted],za};
+    }
+    case 'END_WEEK': {
+      const unfinished=state.ta.filter(t=>!t.completed).map(t=>({...t,days:Array(7).fill(null).map(()=>({priority:'',carried:false})),typ:t.typ||'I'}));
+      const newTA=[...(state.za[0]||[]),...unfinished];
+      const za=[[],[],[],[]]; za[0]=state.za[1]||[]; za[1]=state.za[2]||[]; za[2]=state.za[3]||[];
+      const ws=new Date(state.weekStart); ws.setDate(ws.getDate()+7);
+      const recurring=state.recurring.map(t=>({...t,days:Array(7).fill(null).map(()=>({priority:'',carried:false})),completed:false}));
+      return {...state,ta:newTA,za,weekStart:ws.toISOString(),recurring};
+    }
+    case 'UPDATE_Z': return {...state,z:state.z.map((e,i)=>i===action.i?{...e,text:action.text}:e)};
+    case 'ADD_Z': return {...state,z:[...state.z,{id:uid(),text:''}]};
+    case 'UPDATE_IMPULSE': return {...state,impulse:state.impulse.map((e,i)=>i===action.i?{...e,text:action.text}:e)};
+    case 'ADD_IMPULSE': return {...state,impulse:[...state.impulse,{id:uid(),text:''}]};
+    case 'DELETE_IMPULSE': return {...state,impulse:state.impulse.filter((_,i)=>i!==action.i)};
+    case 'ADD_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:[...state.pa[action.key].tasks,{id:uid(),text:'',done:false}]}}};
+    case 'DELETE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.filter((_,i)=>i!==action.ti)}}};
+    case 'UPDATE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,text:action.text}:t)}}};
+    case 'TOGGLE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,done:action.done}:t)}}};
+    case 'RESET_PA': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map(t=>({...t,done:false})),lastReset:new Date().toISOString()}}};
+    default: return state;
+  }
+}
+
+// ── App ──
+function App() {
+  const [state, setStateRaw] = useState(()=>{ const saved=loadState(); return saved||emptyState(); });
+  const [tab, setTab] = useState('ta');
+  const [toast, setToast] = useState('');
+  const [modal, setModal] = useState(null);
+  const [dataModal, setDataModal] = useState(false);
+
+  function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
+
+  useEffect(()=>{ saveState(state); },[state]);
+
+  function dispatch(action) {
+    if(action.type==='END_WEEK'){if(!window.confirm('Woche abschließen? Offene Aufgaben werden mit ZA Woche 1 zusammengeführt.')) return; showToast('Neue Woche gestartet'); setTab('ta');}
+    if(action.type==='PROMOTE_WEEK'){if(!window.confirm(`Woche ${action.weekIdx+1} nach TA übertragen?`)) return; showToast(`Woche ${action.weekIdx+1} → TA übertragen`); setTab('ta');}
+    if(action.type==='TRANSFER_TO_TA') showToast('→ TA übertragen');
+    if(action.type==='RESET_PA') showToast('Zurückgesetzt · '+new Date().toLocaleDateString('de-DE'));
+    setStateRaw(s=>reducer(s,action));
+  }
+
+  function saveTask({aktivitat,typ,days,name,zaWeek}) {
+    if(modal==='ta') dispatch({type:'ADD_TA',task:{aktivitat,typ,days,name}});
+    else if(modal==='za') dispatch({type:'ADD_ZA',task:{aktivitat,typ,days,name},weekIdx:zaWeek});
+    setModal(null);
+    showToast('Aufgabe gespeichert');
+  }
+
+  function handleImport(newState) {
+    setStateRaw(newState);
+    showToast('Daten importiert ✓');
+  }
+
+  const now=new Date();
+  const dayNames=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
+  const TABS=[
+    {id:'ta',label:'TA',sub:'Tages-Aktivitäten'},
+    {id:'za',label:'ZA',sub:'Zukunfts-Aktivitäten'},
+    {id:'z', label:'Z', sub:'Ziele · Goals'},
+    {id:'pa',label:'PA',sub:'Periodische Aktivitäten'},
+  ];
+
+  return (
+    <div style={{width:'100%',maxWidth:1100,minHeight:'100vh',background:'var(--paper)',margin:'0 auto',display:'flex',flexDirection:'column',boxShadow:'0 0 60px rgba(0,0,0,0.4)'}}>
+      <div style={{background:'var(--ink)',color:'var(--paper)',padding:'18px 28px 0',display:'flex',flexDirection:'column'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',paddingBottom:16}}>
+          <div>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.25rem',letterSpacing:'0.02em'}}>Mr. B's Methode</div>
+            <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.18em',color:'var(--ink-faint)',textTransform:'uppercase',marginTop:2}}>Digital · Planner</div>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:16}}>
+            <button onClick={()=>setDataModal(true)}
+              title="Export / Import"
+              style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.1em',padding:'5px 10px',border:'1px solid #444',background:'transparent',color:'var(--ink-faint)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+              ⇅ Daten
+            </button>
+            <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink-faint)',letterSpacing:'0.08em',textAlign:'right'}}>
+              <span style={{fontSize:'1.1rem',color:'var(--paper)',fontWeight:500,display:'block'}}>{dayNames[now.getDay()]}</span>
+              {fmtDate(now)}
+            </div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:2,alignItems:'flex-end',flexWrap:'wrap'}}>
+          {TABS.map(t=>(
+            <button key={t.id} onClick={()=>setTab(t.id)}
+              style={{fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',letterSpacing:'0.12em',textTransform:'uppercase',padding:tab===t.id?'8px 20px 10px':'8px 20px',background:tab===t.id?'var(--paper)':'#2e2e2a',color:tab===t.id?'var(--ink)':'var(--ink-faint)',border:'none',cursor:'pointer',borderRadius:'4px 4px 0 0',fontWeight:tab===t.id?500:400}}>
+              <span style={{display:'block'}}>{t.label}</span>
+              <span style={{fontSize:'0.58rem',opacity:0.6,letterSpacing:'0.08em',marginTop:1}}>{t.sub}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{flex:1,padding:'24px 28px',overflowY:'auto'}}>
+        {tab==='ta'&&<TAPanel state={state} dispatch={dispatch} onAddTask={setModal}/>}
+        {tab==='za'&&<ZAPanel state={state} dispatch={dispatch} onAddTask={setModal}/>}
+        {tab==='z'&& <ZPanel  state={state} dispatch={dispatch}/>}
+        {tab==='pa'&&<PAPanel state={state} dispatch={dispatch}/>}
+      </div>
+      <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask}/>
+      <DataModal open={dataModal} onClose={()=>setDataModal(false)} state={state} onImport={handleImport}/>
+      <Toast message={toast}/>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
