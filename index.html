@@ -33,7 +33,7 @@ select:focus{outline:none;}
 <!-- Firebase -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCSGHhQnmo3ZRga_WsgawwJmx4F4zEHyH0",
@@ -47,7 +47,7 @@ select:focus{outline:none;}
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
 
-  window._firestore = { db, doc, getDoc, setDoc };
+  window._firestore = { db, doc, getDoc, setDoc, onSnapshot };
   window.dispatchEvent(new Event('firebaseReady'));
 </script>
 
@@ -559,21 +559,34 @@ function App() {
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
 
-  // Load from Firebase on mount
+  // Real-time listener from Firebase
   useEffect(()=>{
-    async function load() {
+    function setup() {
+      const { db, doc, onSnapshot } = window._firestore;
       setSyncStatus('loading');
-      const saved = await fbLoad();
-      if (saved) setStateRaw(saved);
-      setLoaded(true);
-      setSyncStatus('saved');
+      const unsubscribe = onSnapshot(doc(db, COLLECTION, DOC_ID), (snap) => {
+        if (snap.exists()) {
+          try {
+            const incoming = JSON.parse(snap.data().stateJson);
+            setStateRaw(incoming);
+          } catch(e) { console.error('Parse error', e); }
+        }
+        setLoaded(true);
+        setSyncStatus('saved');
+      }, (err) => {
+        console.error('Listener error', err);
+        setSyncStatus('error');
+        setLoaded(true);
+      });
+      return unsubscribe;
     }
-    // Wait for Firebase to be ready
-    if (window._firestore) { load(); }
-    else { window.addEventListener('firebaseReady', load, {once:true}); }
+    let unsub;
+    if (window._firestore) { unsub = setup(); }
+    else { window.addEventListener('firebaseReady', ()=>{ unsub = setup(); }, {once:true}); }
+    return () => { if (unsub) unsub(); };
   },[]);
 
-  // Save to Firebase with debounce
+  // Save to Firebase with debounce (only after initial load)
   useEffect(()=>{
     if (!loaded) return;
     setSyncStatus('syncing');
