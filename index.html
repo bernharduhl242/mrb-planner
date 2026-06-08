@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-<meta name="apple-mobile-web-app-title" content="Mr. B's Methode"/>
+<meta name="apple-mobile-web-app-title" content="Mr. B's Methode V2"/>
 <title>Mr. B's Methode</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400;500&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
@@ -29,23 +29,54 @@ select:focus{outline:none;}
 </head>
 <body>
 <div id="root"></div>
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCSGHhQnmo3ZRga_WsgawwJmx4F4zEHyH0",
+    authDomain: "mrb-planner.firebaseapp.com",
+    projectId: "mrb-planner",
+    storageBucket: "mrb-planner.firebasestorage.app",
+    messagingSenderId: "577912981334",
+    appId: "1:577912981334:web:2640a766557471101ff8f7"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  window._firestore = { db, doc, getDoc, setDoc };
+  window.dispatchEvent(new Event('firebaseReady'));
+</script>
+
+<!-- React -->
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script type="text/babel">
-const { useState, useEffect, useRef, useReducer } = React;
 
-// ── Storage (localStorage for cross-device via export/import) ──
-const STORAGE_KEY = 'mrb-methode-v1';
-function loadState() {
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ── Firebase helpers ──
+const DOC_ID = 'mrb-planner';
+const COLLECTION = 'planner';
+
+async function fbLoad() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch(e) {}
+    const { db, doc, getDoc } = window._firestore;
+    const snap = await getDoc(doc(db, COLLECTION, DOC_ID));
+    if (snap.exists()) return snap.data().state;
+  } catch(e) { console.error('Firebase load error', e); }
   return null;
 }
-function saveState(state) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+
+async function fbSave(state) {
+  try {
+    const { db, doc, setDoc } = window._firestore;
+    await setDoc(doc(db, COLLECTION, DOC_ID), { state });
+  } catch(e) { console.error('Firebase save error', e); }
 }
 
 // ── Helpers ──
@@ -86,7 +117,7 @@ function emptyState() {
   return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, pa };
 }
 
-// ── SVG Icons ──
+// ── SVG ──
 function DelegSVG({ color='#8b6914', size=16 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" style={{display:'block'}}>
@@ -210,7 +241,6 @@ function TaskGrid({ tasks, onUpdate, onDelete, onToggleComplete, isRecurring=fal
   );
 }
 
-// ── UI Components ──
 function Btn({children, onClick, variant='default', style={}}) {
   const base={fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',letterSpacing:'0.1em',padding:'6px 14px',border:'1.5px solid var(--border)',background:'transparent',color:'var(--ink-light)',cursor:'pointer',borderRadius:2,textTransform:'uppercase',transition:'all 0.12s'};
   const variants={
@@ -249,7 +279,21 @@ function Toast({message}) {
   ):null;
 }
 
-// ── Add Task Modal ──
+function SyncBadge({ status }) {
+  const configs = {
+    syncing: { color:'var(--gold)', label:'Synchronisiert…' },
+    saved:   { color:'var(--accent)', label:'✓ Gespeichert' },
+    error:   { color:'var(--red)', label:'⚠ Sync-Fehler' },
+    loading: { color:'var(--ink-faint)', label:'Laden…' },
+  };
+  const c = configs[status] || configs.loading;
+  return (
+    <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',letterSpacing:'0.1em',color:c.color,textTransform:'uppercase'}}>
+      {c.label}
+    </span>
+  );
+}
+
 function AddTaskModal({open, target, onClose, onSave}) {
   const [aktivitat,setAktivitat]=useState('');
   const [typ,setTyp]=useState('');
@@ -295,72 +339,7 @@ function AddTaskModal({open, target, onClose, onSave}) {
   );
 }
 
-// ── Export / Import Modal ──
-function DataModal({open, onClose, state, onImport}) {
-  const [importText,setImportText]=useState('');
-  const [importError,setImportError]=useState('');
-  const [view,setView]=useState('export');
-
-  function doExport() {
-    const json=JSON.stringify(state,null,2);
-    const blob=new Blob([json],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');
-    a.href=url; a.download=`mrb-methode-backup-${fmtDate(new Date()).replace(/\./g,'-')}.json`;
-    a.click(); URL.revokeObjectURL(url);
-  }
-  function doImport() {
-    try {
-      const parsed=JSON.parse(importText);
-      if(!parsed.weekStart||!parsed.ta) throw new Error('Ungültiges Format');
-      onImport(parsed);
-      onClose();
-    } catch(e) { setImportError('Ungültige Datei · Bitte eine gültige Backup-Datei einfügen'); }
-  }
-  if(!open) return null;
-  return (
-    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(26,26,24,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:'var(--paper)',border:'1.5px solid var(--ink)',padding:24,minWidth:300,maxWidth:480,width:'90%',boxShadow:'0 2px 20px rgba(26,26,24,0.15)',borderRadius:3}}>
-        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.1rem',marginBottom:16,color:'var(--ink)',borderBottom:'1px solid var(--border)',paddingBottom:10}}>
-          Daten · Export & Import
-        </div>
-        <div style={{display:'flex',gap:4,marginBottom:20}}>
-          {['export','import'].map(v=>(
-            <button key={v} onClick={()=>setView(v)}
-              style={{flex:1,padding:'7px 0',fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',letterSpacing:'0.12em',textTransform:'uppercase',border:'1.5px solid var(--border)',background:view===v?'var(--ink)':'transparent',color:view===v?'var(--paper)':'var(--ink-faint)',cursor:'pointer',borderRadius:2}}>
-              {v==='export'?'↓ Export':'↑ Import'}
-            </button>
-          ))}
-        </div>
-        {view==='export'&&(
-          <div>
-            <p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-light)',marginBottom:16,lineHeight:1.6}}>
-              Exportiert alle Daten als JSON-Datei. Nutze diese Datei als Backup oder um Daten auf ein anderes Gerät zu übertragen.
-            </p>
-            <Btn variant="primary" onClick={doExport} style={{width:'100%',textAlign:'center'}}>↓ Backup herunterladen</Btn>
-          </div>
-        )}
-        {view==='import'&&(
-          <div>
-            <p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-light)',marginBottom:12,lineHeight:1.6}}>
-              JSON-Inhalt einer Backup-Datei hier einfügen. Achtung: Aktuelle Daten werden überschrieben.
-            </p>
-            <textarea value={importText} onChange={e=>{setImportText(e.target.value);setImportError('');}}
-              placeholder="JSON hier einfügen..."
-              style={{width:'100%',height:120,fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'8px 10px',borderRadius:2,resize:'vertical',marginBottom:8}}/>
-            {importError&&<p style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--red)',marginBottom:8}}>{importError}</p>}
-            <Btn variant="danger" onClick={doImport} style={{width:'100%',textAlign:'center'}}>↑ Daten importieren</Btn>
-          </div>
-        )}
-        <div style={{marginTop:16,display:'flex',justifyContent:'flex-end'}}>
-          <Btn onClick={onClose}>Schließen</Btn>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── TA Panel ──
+// ── Panels ──
 function TAPanel({state, dispatch, onAddTask}) {
   const ws=new Date(state.weekStart);
   const total=state.ta.length, done=state.ta.filter(t=>t.completed).length;
@@ -396,7 +375,6 @@ function TAPanel({state, dispatch, onAddTask}) {
   );
 }
 
-// ── ZA Panel ──
 function ZAPanel({state, dispatch, onAddTask}) {
   return (
     <div>
@@ -430,7 +408,6 @@ function ZAPanel({state, dispatch, onAddTask}) {
   );
 }
 
-// ── Z Panel ──
 function ZPanel({state, dispatch}) {
   return (
     <div>
@@ -453,9 +430,8 @@ function ZPanel({state, dispatch}) {
   );
 }
 
-// ── PA Panel ──
 function PAPanel({state, dispatch}) {
-  const cardStyle={border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden',marginBottom:0};
+  const cardStyle={border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden'};
   const cardHeader=(title,sub)=>(
     <div style={{background:'var(--ink)',color:'var(--paper)',padding:'10px 16px',display:'flex',alignItems:'center',gap:12}}>
       <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',flex:1}}>{title}</div>
@@ -530,7 +506,6 @@ function PAPanel({state, dispatch}) {
 
 // ── Reducer ──
 function reducer(state, action) {
-  let next;
   switch(action.type) {
     case 'LOAD': return {...action.state};
     case 'ADD_TA': return {...state,ta:[...state.ta,makeTask(action.task)]};
@@ -574,20 +549,44 @@ function reducer(state, action) {
 
 // ── App ──
 function App() {
-  const [state, setStateRaw] = useState(()=>{ const saved=loadState(); return saved||emptyState(); });
+  const [state, setStateRaw] = useState(emptyState);
   const [tab, setTab] = useState('ta');
   const [toast, setToast] = useState('');
   const [modal, setModal] = useState(null);
-  const [dataModal, setDataModal] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('loading');
+  const [loaded, setLoaded] = useState(false);
+  const saveTimer = useRef(null);
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
 
-  useEffect(()=>{ saveState(state); },[state]);
+  // Load from Firebase on mount
+  useEffect(()=>{
+    async function load() {
+      setSyncStatus('loading');
+      const saved = await fbLoad();
+      if (saved) setStateRaw(saved);
+      setLoaded(true);
+      setSyncStatus('saved');
+    }
+    // Wait for Firebase to be ready
+    if (window._firestore) { load(); }
+    else { window.addEventListener('firebaseReady', load, {once:true}); }
+  },[]);
+
+  // Save to Firebase with debounce
+  useEffect(()=>{
+    if (!loaded) return;
+    setSyncStatus('syncing');
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async ()=>{
+      await fbSave(state);
+      setSyncStatus('saved');
+    }, 1500);
+  },[state, loaded]);
 
   function dispatch(action) {
     if(action.type==='END_WEEK'){if(!window.confirm('Woche abschließen? Offene Aufgaben werden mit ZA Woche 1 zusammengeführt.')) return; showToast('Neue Woche gestartet'); setTab('ta');}
     if(action.type==='PROMOTE_WEEK'){if(!window.confirm(`Woche ${action.weekIdx+1} nach TA übertragen?`)) return; showToast(`Woche ${action.weekIdx+1} → TA übertragen`); setTab('ta');}
-    if(action.type==='TRANSFER_TO_TA') showToast('→ TA übertragen');
     if(action.type==='RESET_PA') showToast('Zurückgesetzt · '+new Date().toLocaleDateString('de-DE'));
     setStateRaw(s=>reducer(s,action));
   }
@@ -599,11 +598,6 @@ function App() {
     showToast('Aufgabe gespeichert');
   }
 
-  function handleImport(newState) {
-    setStateRaw(newState);
-    showToast('Daten importiert ✓');
-  }
-
   const now=new Date();
   const dayNames=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
   const TABS=[
@@ -612,6 +606,12 @@ function App() {
     {id:'z', label:'Z', sub:'Ziele · Goals'},
     {id:'pa',label:'PA',sub:'Periodische Aktivitäten'},
   ];
+
+  if (!loaded) return (
+    <div style={{minHeight:'100vh',background:'var(--ink)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+      <span style={{fontFamily:"'DM Mono',monospace",color:'var(--ink-faint)',letterSpacing:'0.2em',fontSize:'0.75rem'}}>LADEN…</span>
+    </div>
+  );
 
   return (
     <div style={{width:'100%',maxWidth:1100,minHeight:'100vh',background:'var(--paper)',margin:'0 auto',display:'flex',flexDirection:'column',boxShadow:'0 0 60px rgba(0,0,0,0.4)'}}>
@@ -622,11 +622,7 @@ function App() {
             <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.18em',color:'var(--ink-faint)',textTransform:'uppercase',marginTop:2}}>Digital · Planner</div>
           </div>
           <div style={{display:'flex',alignItems:'center',gap:16}}>
-            <button onClick={()=>setDataModal(true)}
-              title="Export / Import"
-              style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.1em',padding:'5px 10px',border:'1px solid #444',background:'transparent',color:'var(--ink-faint)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
-              ⇅ Daten
-            </button>
+            <SyncBadge status={syncStatus}/>
             <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink-faint)',letterSpacing:'0.08em',textAlign:'right'}}>
               <span style={{fontSize:'1.1rem',color:'var(--paper)',fontWeight:500,display:'block'}}>{dayNames[now.getDay()]}</span>
               {fmtDate(now)}
@@ -650,7 +646,6 @@ function App() {
         {tab==='pa'&&<PAPanel state={state} dispatch={dispatch}/>}
       </div>
       <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask}/>
-      <DataModal open={dataModal} onClose={()=>setDataModal(false)} state={state} onImport={handleImport}/>
       <Toast message={toast}/>
     </div>
   );
