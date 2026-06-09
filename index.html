@@ -548,7 +548,8 @@ function ProjektePanel({state, dispatch}) {
   function getTasksForProjekt(projektId) {
     const taTasks = state.ta.filter(t=>t.projektId===projektId);
     const zaTasks = state.za.flat().filter(t=>t.projektId===projektId);
-    return [...taTasks, ...zaTasks];
+    const recurringTasks = (state.recurring||[]).filter(t=>t.projektId===projektId);
+    return [...recurringTasks, ...taTasks, ...zaTasks];
   }
 
   const aktiveProjekte = (state.projekte||[]).filter(p=>p.status==='aktiv');
