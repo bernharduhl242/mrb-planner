@@ -536,6 +536,21 @@ function ProjektePanel({state, dispatch}) {
   const [newZielId, setNewZielId] = useState('');
   const [selectedProjekt, setSelectedProjekt] = useState(null);
   const [showAbgeschlossen, setShowAbgeschlossen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editZielId, setEditZielId] = useState('');
+
+  function startEdit(p) {
+    setEditName(p.name);
+    setEditZielId(p.zielId||'');
+    setEditing(true);
+  }
+  function saveEdit() {
+    if (!editName.trim()) return;
+    dispatch({type:'UPDATE_PROJEKT', projekt:{...selectedProjekt, name:editName.trim(), zielId:editZielId||null}});
+    setSelectedProjekt(p=>({...p, name:editName.trim(), zielId:editZielId||null}));
+    setEditing(false);
+  }
 
   function addProjekt(e) {
     if (e) e.stopPropagation();
@@ -570,6 +585,7 @@ function ProjektePanel({state, dispatch}) {
       <div>
         <SectionHeader title={selectedProjekt.name} meta={zt?`Ziel: ${zt}`:undefined}>
           <Btn onClick={()=>setSelectedProjekt(null)}>← Zurück</Btn>
+          <Btn variant="gold" onClick={()=>startEdit(selectedProjekt)}>✎ Bearbeiten</Btn>
           <Btn variant="danger" onClick={()=>{
             if(window.confirm(`Projekt "${selectedProjekt.name}" löschen?`)){
               dispatch({type:'DELETE_PROJEKT',id:selectedProjekt.id});
@@ -577,6 +593,30 @@ function ProjektePanel({state, dispatch}) {
             }
           }}>Löschen</Btn>
         </SectionHeader>
+        {editing&&(
+          <div style={{border:'1.5px solid var(--gold)',borderRadius:3,padding:16,marginBottom:24,background:'var(--paper-warm)'}}>
+            <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',marginBottom:12,color:'var(--ink)'}}>Projekt bearbeiten</div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:5}}>Projektname</label>
+              <input value={editName} onChange={e=>setEditName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&saveEdit()}
+                style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:5}}>Ziel verknüpfen (optional)</label>
+              <select value={editZielId} onChange={e=>setEditZielId(e.target.value)}
+                style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}>
+                <option value="">— Kein Ziel —</option>
+                {state.z.filter(z=>z.text).map((z,i)=>(
+                  <option key={z.id} value={z.id}>{i+1}. {z.text}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+              <Btn onClick={()=>setEditing(false)}>Abbrechen</Btn>
+              <Btn variant="primary" onClick={saveEdit}>Speichern</Btn>
+            </div>
+          </div>
+        )}
         <SubLabel>Aktive Aufgaben</SubLabel>
         <div style={{marginBottom:24}}>
           {aktiv.length===0?(
