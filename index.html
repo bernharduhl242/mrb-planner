@@ -706,9 +706,9 @@ function reducer(state, action) {
     case 'UPDATE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,text:action.text}:t)}}};
     case 'TOGGLE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,done:action.done}:t)}}};
     case 'RESET_PA': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map(t=>({...t,done:false})),lastReset:new Date().toISOString()}}};
-    case 'ADD_PROJEKT': return {...state,projekte:[...state.projekte,{id:uid(),name:action.name,zielId:action.zielId||null,status:'aktiv'}]};
-    case 'UPDATE_PROJEKT': return {...state,projekte:state.projekte.map(p=>p.id===action.projekt.id?action.projekt:p)};
-    case 'DELETE_PROJEKT': return {...state,projekte:state.projekte.filter(p=>p.id!==action.id),ta:state.ta.map(t=>t.projektId===action.id?{...t,projektId:null}:t),za:state.za.map(w=>w.map(t=>t.projektId===action.id?{...t,projektId:null}:t))};
+    case 'ADD_PROJEKT': return {...state,projekte:[...(state.projekte||[]),{id:uid(),name:action.name,zielId:action.zielId||null,status:'aktiv'}]};
+    case 'UPDATE_PROJEKT': return {...state,projekte:(state.projekte||[]).map(p=>p.id===action.projekt.id?action.projekt:p)};
+    case 'DELETE_PROJEKT': return {...state,projekte:(state.projekte||[]).filter(p=>p.id!==action.id),ta:state.ta.map(t=>t.projektId===action.id?{...t,projektId:null}:t),za:state.za.map(w=>w.map(t=>t.projektId===action.id?{...t,projektId:null}:t))};
     case 'SET_TASK_PROJEKT_TA': return {...state,ta:state.ta.map(t=>t.id===action.taskId?{...t,projektId:action.projektId}:t)};
     case 'SET_TASK_PROJEKT_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.taskId?{...t,projektId:action.projektId}:t); return {...state,za}; }
     default: return state;
@@ -739,6 +739,7 @@ function App() {
         if (snap.exists()) {
           try {
             const incoming = JSON.parse(snap.data().stateJson);
+            if (!incoming.projekte) incoming.projekte = [];
             setStateRaw(incoming);
           } catch(e) { console.error('Parse error', e); }
         }
