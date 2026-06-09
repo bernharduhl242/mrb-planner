@@ -100,7 +100,7 @@ function fmtWeek(monday) {
   return `KW ${getWeekNum(m)} · ${fmtDate(m)} – ${fmtDate(s)}`;
 }
 function makeTask(overrides={}) {
-  return { id:uid(), aktivitat:'', typ:'', days:Array(7).fill(null).map(()=>({priority:'',carried:false})), name:'', completed:false, ...overrides };
+  return { id:uid(), aktivitat:'', typ:'', days:Array(7).fill(null).map(()=>({priority:'',carried:false})), name:'', completed:false, completedAt:null, projektId:null, ...overrides };
 }
 function emptyState() {
   const recurring = [
@@ -114,7 +114,7 @@ function emptyState() {
     sixmonth: { tasks:[{id:uid(),text:'Versicherungen prüfen',done:false}], lastReset:null },
     yearly:   { tasks:[{id:uid(),text:'Z · Ziele überprüfen',done:false}], lastReset:null },
   };
-  return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, pa };
+  return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, pa, projekte:[] };
 }
 
 // ── SVG ──
@@ -294,19 +294,20 @@ function SyncBadge({ status }) {
   );
 }
 
-function AddTaskModal({open, target, onClose, onSave}) {
+function AddTaskModal({open, target, onClose, onSave, projekte=[]}) {
   const [aktivitat,setAktivitat]=useState('');
   const [typ,setTyp]=useState('');
   const [day,setDay]=useState('');
   const [priority,setPriority]=useState('');
   const [name,setName]=useState('');
   const [zaWeek,setZaWeek]=useState(0);
-  useEffect(()=>{if(open){setAktivitat('');setTyp('');setDay('');setPriority('');setName('');setZaWeek(0);}},[open]);
+  useEffect(()=>{if(open){setAktivitat('');setTyp('');setDay('');setPriority('');setName('');setZaWeek(0);setProjektId('');}},[open]);
+  const [projektId,setProjektId]=useState('');
   function save() {
     if(!aktivitat.trim()) return;
     const days=Array(7).fill(null).map(()=>({priority:'',carried:false}));
     if(day!==''&&priority) days[parseInt(day)].priority=priority;
-    onSave({aktivitat:aktivitat.trim(),typ,days,name:name.trim(),zaWeek});
+    onSave({aktivitat:aktivitat.trim(),typ,days,name:name.trim(),zaWeek,projektId:projektId||null});
   }
   const prioBtn=(p)=>(
     <button key={p} onClick={()=>setPriority(priority===p?'':p)}
@@ -330,6 +331,7 @@ function AddTaskModal({open, target, onClose, onSave}) {
         {target==='za'&&<div style={{marginBottom:14}}>{fLabel('Woche (ZA)')}{fSelect({value:zaWeek,onChange:e=>setZaWeek(parseInt(e.target.value)),children:[0,1,2,3].map(w=><option key={w} value={w}>Woche {w+1}{w===0?' (nächste)':''}</option>)})}</div>}
         <div style={{marginBottom:14}}>{fLabel('Priorität')}<div style={{display:'flex',gap:8}}>{['I','II','III'].map(prioBtn)}</div></div>
         <div style={{marginBottom:14}}>{fLabel('N · Delegiert an')}{fInput({value:name,onChange:e=>setName(e.target.value),placeholder:'Name (optional)'})}</div>
+        <div style={{marginBottom:14}}>{fLabel('Projekt (optional)')}<select value={projektId} onChange={e=>setProjektId(e.target.value)} style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}><option value="">— Kein Projekt —</option>{(projekte||[]).filter(p=>p.status==='aktiv').map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
         <div style={{display:'flex',gap:8,justifyContent:'flex-end',marginTop:18}}>
           <Btn onClick={onClose}>Abbrechen</Btn>
           <Btn onClick={save} variant="primary">Speichern</Btn>
@@ -504,6 +506,166 @@ function PAPanel({state, dispatch}) {
   );
 }
 
+// ── Projekte Panel ──
+function ProjektePanel({state, dispatch}) {
+  const [showForm, setShowForm] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newZielId, setNewZielId] = useState('');
+  const [selectedProjekt, setSelectedProjekt] = useState(null);
+  const [showAbgeschlossen, setShowAbgeschlossen] = useState(false);
+
+  function addProjekt() {
+    if (!newName.trim()) return;
+    dispatch({type:'ADD_PROJEKT', name:newName.trim(), zielId:newZielId||null});
+    setNewName(''); setNewZielId(''); setShowForm(false);
+  }
+
+  // Collect all tasks across TA and ZA for a given projekt
+  function getTasksForProjekt(projektId) {
+    const taTasks = state.ta.filter(t=>t.projektId===projektId);
+    const zaTasks = state.za.flat().filter(t=>t.projektId===projektId);
+    return [...taTasks, ...zaTasks];
+  }
+
+  const aktiveProjekte = (state.projekte||[]).filter(p=>p.status==='aktiv');
+  const abgeschlosseneProjekte = (state.projekte||[]).filter(p=>p.status==='abgeschlossen');
+
+  const zielText = (zielId) => {
+    if (!zielId) return null;
+    const z = state.z.find(z=>z.id===zielId);
+    return z ? z.text : null;
+  };
+
+  if (selectedProjekt) {
+    const tasks = getTasksForProjekt(selectedProjekt.id);
+    const aktiv = tasks.filter(t=>!t.completed);
+    const done = tasks.filter(t=>t.completed).sort((a,b)=>new Date(b.completedAt||0)-new Date(a.completedAt||0));
+    const zt = zielText(selectedProjekt.zielId);
+    return (
+      <div>
+        <SectionHeader title={selectedProjekt.name} meta={zt?`Ziel: ${zt}`:undefined}>
+          <Btn onClick={()=>setSelectedProjekt(null)}>← Zurück</Btn>
+          <Btn variant="danger" onClick={()=>{
+            if(window.confirm(`Projekt "${selectedProjekt.name}" löschen?`)){
+              dispatch({type:'DELETE_PROJEKT',id:selectedProjekt.id});
+              setSelectedProjekt(null);
+            }
+          }}>Löschen</Btn>
+        </SectionHeader>
+        <SubLabel>Aktive Aufgaben</SubLabel>
+        <div style={{marginBottom:24}}>
+          {aktiv.length===0?(
+            <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',padding:'16px 0',letterSpacing:'0.06em'}}>Keine aktiven Aufgaben</div>
+          ):aktiv.map(t=>(
+            <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',marginBottom:4,border:'1px solid var(--border)',borderRadius:3,background:'var(--paper)'}}>
+              <div style={{flex:1,fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink)'}}>{t.aktivitat}</div>
+              {t.typ&&<span style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.8rem',color:'var(--gold)'}}>{t.typ}</span>}
+              {t.name&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>→ {t.name}</span>}
+            </div>
+          ))}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,cursor:'pointer'}} onClick={()=>setShowAbgeschlossen(!showAbgeschlossen)}>
+          <SubLabel>Abgeschlossen</SubLabel>
+          <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>{showAbgeschlossen?'▲':'▼'} {done.length}</span>
+        </div>
+        {showAbgeschlossen&&(
+          done.length===0?(
+            <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',padding:'16px 0',letterSpacing:'0.06em'}}>Keine abgeschlossenen Aufgaben</div>
+          ):done.map(t=>(
+            <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',marginBottom:4,border:'1px solid var(--paper-grid)',borderRadius:3,background:'var(--paper-warm)',opacity:0.7}}>
+              <div style={{flex:1,fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink-faint)',textDecoration:'line-through'}}>{t.aktivitat}</div>
+              {t.completedAt&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',color:'var(--ink-faint)'}}>{fmtDate(new Date(t.completedAt))}</span>}
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <SectionHeader title="Projekte" meta={`${aktiveProjekte.length} aktiv`}>
+        <Btn variant="primary" onClick={()=>setShowForm(!showForm)}>+ Projekt</Btn>
+      </SectionHeader>
+
+      {showForm&&(
+        <div style={{border:'1.5px solid var(--border)',borderRadius:3,padding:16,marginBottom:24,background:'var(--paper-warm)'}}>
+          <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',marginBottom:12,color:'var(--ink)'}}>Neues Projekt</div>
+          <div style={{marginBottom:12}}>
+            <label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:5}}>Projektname</label>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Projektname..."
+              onKeyDown={e=>e.key==='Enter'&&addProjekt()}
+              autoFocus
+              style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}/>
+          </div>
+          <div style={{marginBottom:12}}>
+            <label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:5}}>Ziel verknüpfen (optional)</label>
+            <select value={newZielId} onChange={e=>setNewZielId(e.target.value)}
+              style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'7px 10px',borderRadius:2}}>
+              <option value="">— Kein Ziel —</option>
+              {state.z.filter(z=>z.text).map((z,i)=>(
+                <option key={z.id} value={z.id}>{i+1}. {z.text}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+            <Btn onClick={()=>{setShowForm(false);setNewName('');setNewZielId('');}}>Abbrechen</Btn>
+            <Btn variant="primary" onClick={addProjekt}>Speichern</Btn>
+          </div>
+        </div>
+      )}
+
+      {aktiveProjekte.length===0&&!showForm&&(
+        <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',textAlign:'center',padding:40,letterSpacing:'0.06em'}}>Keine Projekte · Klicke "+ Projekt"</div>
+      )}
+
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {aktiveProjekte.map(p=>{
+          const tasks = getTasksForProjekt(p.id);
+          const aktiv = tasks.filter(t=>!t.completed).length;
+          const done = tasks.filter(t=>t.completed).length;
+          const zt = zielText(p.zielId);
+          return (
+            <div key={p.id} onClick={()=>setSelectedProjekt(p)}
+              style={{border:'1.5px solid var(--border)',borderRadius:3,padding:'14px 16px',background:'var(--paper)',cursor:'pointer',display:'flex',alignItems:'center',gap:16}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',color:'var(--ink)',marginBottom:zt?4:0}}>{p.name}</div>
+                {zt&&<div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',color:'var(--accent)',letterSpacing:'0.08em'}}>↗ {zt}</div>}
+              </div>
+              <div style={{display:'flex',gap:12,alignItems:'center'}}>
+                <div style={{textAlign:'center'}}>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',color:'var(--ink)'}}>{aktiv}</div>
+                  <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',color:'var(--ink-faint)',letterSpacing:'0.08em'}}>Offen</div>
+                </div>
+                <div style={{textAlign:'center'}}>
+                  <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',color:'var(--ink-faint)'}}>{done}</div>
+                  <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',color:'var(--ink-faint)',letterSpacing:'0.08em'}}>Erledigt</div>
+                </div>
+                <span style={{color:'var(--ink-faint)',fontSize:'0.9rem'}}>›</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {abgeschlosseneProjekte.length>0&&(
+        <div style={{marginTop:32}}>
+          <SubLabel>Abgeschlossene Projekte</SubLabel>
+          <div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {abgeschlosseneProjekte.map(p=>(
+              <div key={p.id} onClick={()=>setSelectedProjekt(p)}
+                style={{border:'1px solid var(--paper-grid)',borderRadius:3,padding:'12px 16px',background:'var(--paper-warm)',cursor:'pointer',opacity:0.6,display:'flex',alignItems:'center',gap:16}}>
+                <div style={{flex:1,fontFamily:"'DM Serif Display',serif",fontSize:'0.95rem',color:'var(--ink-faint)'}}>{p.name}</div>
+                <span style={{color:'var(--ink-faint)',fontSize:'0.9rem'}}>›</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Reducer ──
 function reducer(state, action) {
   switch(action.type) {
@@ -511,7 +673,7 @@ function reducer(state, action) {
     case 'ADD_TA': return {...state,ta:[...state.ta,makeTask(action.task)]};
     case 'UPDATE_TA': return {...state,ta:state.ta.map(t=>t.id===action.task.id?action.task:t)};
     case 'DELETE_TA': return {...state,ta:state.ta.filter(t=>t.id!==action.id)};
-    case 'TOGGLE_TA': return {...state,ta:state.ta.map(t=>t.id===action.id?{...t,completed:!t.completed}:t)};
+    case 'TOGGLE_TA': return {...state,ta:state.ta.map(t=>t.id===action.id?{...t,completed:!t.completed,completedAt:t.completed?null:new Date().toISOString()}:t)};
     case 'ADD_RECURRING': return {...state,recurring:[...state.recurring,makeTask()]};
     case 'UPDATE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.task.id?action.task:t)};
     case 'DELETE_RECURRING': return {...state,recurring:state.recurring.filter(t=>t.id!==action.id)};
@@ -519,7 +681,7 @@ function reducer(state, action) {
     case 'ADD_ZA': { const za=[...state.za]; za[action.weekIdx]=[...(za[action.weekIdx]||[]),makeTask(action.task)]; return {...state,za}; }
     case 'UPDATE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.task.id?action.task:t); return {...state,za}; }
     case 'DELETE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).filter(t=>t.id!==action.id); return {...state,za}; }
-    case 'TOGGLE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.id?{...t,completed:!t.completed}:t); return {...state,za}; }
+    case 'TOGGLE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.id?{...t,completed:!t.completed,completedAt:t.completed?null:new Date().toISOString()}:t); return {...state,za}; }
     case 'PROMOTE_WEEK': {
       const promoted=(state.za[action.weekIdx]||[]).map(t=>({...t,days:Array(7).fill(null).map(()=>({priority:'',carried:false}))}));
       const za=[...state.za]; za[action.weekIdx]=[];
@@ -543,6 +705,11 @@ function reducer(state, action) {
     case 'UPDATE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,text:action.text}:t)}}};
     case 'TOGGLE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,done:action.done}:t)}}};
     case 'RESET_PA': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map(t=>({...t,done:false})),lastReset:new Date().toISOString()}}};
+    case 'ADD_PROJEKT': return {...state,projekte:[...state.projekte,{id:uid(),name:action.name,zielId:action.zielId||null,status:'aktiv'}]};
+    case 'UPDATE_PROJEKT': return {...state,projekte:state.projekte.map(p=>p.id===action.projekt.id?action.projekt:p)};
+    case 'DELETE_PROJEKT': return {...state,projekte:state.projekte.filter(p=>p.id!==action.id),ta:state.ta.map(t=>t.projektId===action.id?{...t,projektId:null}:t),za:state.za.map(w=>w.map(t=>t.projektId===action.id?{...t,projektId:null}:t))};
+    case 'SET_TASK_PROJEKT_TA': return {...state,ta:state.ta.map(t=>t.id===action.taskId?{...t,projektId:action.projektId}:t)};
+    case 'SET_TASK_PROJEKT_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.taskId?{...t,projektId:action.projektId}:t); return {...state,za}; }
     default: return state;
   }
 }
@@ -604,9 +771,9 @@ function App() {
     setStateRaw(s=>reducer(s,action));
   }
 
-  function saveTask({aktivitat,typ,days,name,zaWeek}) {
-    if(modal==='ta') dispatch({type:'ADD_TA',task:{aktivitat,typ,days,name}});
-    else if(modal==='za') dispatch({type:'ADD_ZA',task:{aktivitat,typ,days,name},weekIdx:zaWeek});
+  function saveTask({aktivitat,typ,days,name,zaWeek,projektId}) {
+    if(modal==='ta') dispatch({type:'ADD_TA',task:{aktivitat,typ,days,name,projektId}});
+    else if(modal==='za') dispatch({type:'ADD_ZA',task:{aktivitat,typ,days,name,projektId},weekIdx:zaWeek});
     setModal(null);
     showToast('Aufgabe gespeichert');
   }
@@ -618,6 +785,7 @@ function App() {
     {id:'za',label:'ZA',sub:'Zukunfts-Aktivitäten'},
     {id:'z', label:'Z', sub:'Ziele · Goals'},
     {id:'pa',label:'PA',sub:'Periodische Aktivitäten'},
+    {id:'pr',label:'PR',sub:'Projekte'},
   ];
 
   if (!loaded) return (
@@ -657,8 +825,9 @@ function App() {
         {tab==='za'&&<ZAPanel state={state} dispatch={dispatch} onAddTask={setModal}/>}
         {tab==='z'&& <ZPanel  state={state} dispatch={dispatch}/>}
         {tab==='pa'&&<PAPanel state={state} dispatch={dispatch}/>}
+        {tab==='pr'&&<ProjektePanel state={state} dispatch={dispatch}/>}
       </div>
-      <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask}/>
+      <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask} projekte={state.projekte||[]}/>
       <Toast message={toast}/>
     </div>
   );
