@@ -514,7 +514,8 @@ function ProjektePanel({state, dispatch}) {
   const [selectedProjekt, setSelectedProjekt] = useState(null);
   const [showAbgeschlossen, setShowAbgeschlossen] = useState(false);
 
-  function addProjekt() {
+  function addProjekt(e) {
+    if (e) e.stopPropagation();
     if (!newName.trim()) return;
     dispatch({type:'ADD_PROJEKT', name:newName.trim(), zielId:newZielId||null});
     setNewName(''); setNewZielId(''); setShowForm(false);
@@ -726,12 +727,15 @@ function App() {
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
 
+  const suppressIncoming = useRef(false);
+
   // Real-time listener from Firebase
   useEffect(()=>{
     function setup() {
       const { db, doc, onSnapshot } = window._firestore;
       setSyncStatus('loading');
       const unsubscribe = onSnapshot(doc(db, COLLECTION, DOC_ID), (snap) => {
+        if (suppressIncoming.current) return;
         if (snap.exists()) {
           try {
             const incoming = JSON.parse(snap.data().stateJson);
@@ -757,10 +761,12 @@ function App() {
   useEffect(()=>{
     if (!loaded) return;
     setSyncStatus('syncing');
+    suppressIncoming.current = true;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async ()=>{
       await fbSave(state);
       setSyncStatus('saved');
+      setTimeout(()=>{ suppressIncoming.current = false; }, 2000);
     }, 1500);
   },[state, loaded]);
 
