@@ -155,7 +155,7 @@ function DayCell({ dayData, onCycle, onCarry }) {
 }
 
 // ── Task Row ──
-function TaskRow({ task, onUpdate, onDelete, onToggleComplete, isRecurring }) {
+function TaskRow({ task, onUpdate, onDelete, onToggleComplete, isRecurring, projekte=[] }) {
   const rowBg = isRecurring?(task.completed?'rgba(232,240,224,0.45)':'var(--accent-faint)'):(task.completed?'rgba(245,242,235,0.45)':undefined);
   function cycleDay(d) {
     const cur=task.days[d].priority;
@@ -166,16 +166,41 @@ function TaskRow({ task, onUpdate, onDelete, onToggleComplete, isRecurring }) {
     if(!task.days[d].priority) return;
     onUpdate({...task,days:task.days.map((dd,i)=>i===d?{...dd,carried:!dd.carried}:dd)});
   }
+  const [showProjektPicker, setShowProjektPicker] = useState(false);
   function cycleW() {
     const opts=['','I','II','III']; const next=opts[(opts.indexOf(task.typ)+1)%opts.length];
     onUpdate({...task,typ:next});
   }
+  function assignProjekt(pid) {
+    onUpdate({...task, projektId:pid||null});
+    setShowProjektPicker(false);
+  }
+  const assignedProjekt = projekte.find(p=>p.id===task.projektId);
   return (
     <tr style={{opacity:task.completed?0.45:1}}>
-      <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:200}}>
+      <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:200,position:'relative'}}>
         <input type="text" value={task.aktivitat} placeholder="Aktivität..."
           onChange={e=>onUpdate({...task,aktivitat:e.target.value})}
           style={{width:'100%',border:'none',background:'transparent',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',color:'var(--ink)',padding:'5px 8px',textDecoration:task.completed?'line-through':'none'}}/>
+        {projekte.length>0&&(
+          <div style={{paddingLeft:8,paddingBottom:3}}>
+            <span onClick={()=>setShowProjektPicker(!showProjektPicker)}
+              style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',color:assignedProjekt?'var(--accent)':'var(--ink-faint)',cursor:'pointer',letterSpacing:'0.06em',borderBottom:assignedProjekt?'1px solid var(--accent)':'1px dashed var(--paper-grid)'}}>
+              {assignedProjekt?`↗ ${assignedProjekt.name}`:'+ Projekt'}
+            </span>
+          </div>
+        )}
+        {showProjektPicker&&(
+          <div onClick={e=>e.stopPropagation()} style={{position:'absolute',top:'100%',left:0,zIndex:50,background:'var(--paper)',border:'1.5px solid var(--ink)',borderRadius:3,minWidth:200,boxShadow:'0 4px 16px rgba(0,0,0,0.15)'}}>
+            <div onClick={()=>assignProjekt('')} style={{padding:'7px 12px',fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',color:'var(--ink-faint)',cursor:'pointer',borderBottom:'1px solid var(--paper-grid)'}}>— Kein Projekt —</div>
+            {projekte.filter(p=>p.status==='aktiv').map(p=>(
+              <div key={p.id} onClick={()=>assignProjekt(p.id)}
+                style={{padding:'7px 12px',fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',color:task.projektId===p.id?'var(--accent)':'var(--ink)',cursor:'pointer',background:task.projektId===p.id?'var(--accent-faint)':'transparent',borderBottom:'1px solid var(--paper-grid)'}}>
+                {task.projektId===p.id?'✓ ':''}{p.name}
+              </div>
+            ))}
+          </div>
+        )}
       </td>
       <td style={{border:'1px solid var(--paper-grid)',padding:0,background:rowBg,minWidth:42}}>
         <div onClick={cycleW} style={{display:'flex',alignItems:'center',justifyContent:'center',height:32,cursor:'pointer'}}>
@@ -196,10 +221,8 @@ function TaskRow({ task, onUpdate, onDelete, onToggleComplete, isRecurring }) {
             style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.7rem',borderRadius:2}}>
             {task.completed?'↩':'✓'}
           </button>
-          {!isRecurring&&(
-            <button onClick={onDelete} title="Löschen"
-              style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.8rem',borderRadius:2}}>×</button>
-          )}
+          <button onClick={onDelete} title="Löschen"
+            style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.8rem',borderRadius:2}}>×</button>
         </div>
       </td>
     </tr>
@@ -221,7 +244,7 @@ function GridHead() {
   );
 }
 
-function TaskGrid({ tasks, onUpdate, onDelete, onToggleComplete, isRecurring=false }) {
+function TaskGrid({ tasks, onUpdate, onDelete, onToggleComplete, isRecurring=false, projekte=[] }) {
   return (
     <div style={{overflowX:'auto'}}>
       <table style={{width:'100%',borderCollapse:'collapse',fontFamily:"'DM Mono',monospace",fontSize:'0.72rem'}}>
@@ -232,7 +255,7 @@ function TaskGrid({ tasks, onUpdate, onDelete, onToggleComplete, isRecurring=fal
               Keine Aufgaben
             </td></tr>
           ):tasks.map(t=>(
-            <TaskRow key={t.id} task={t} isRecurring={isRecurring}
+            <TaskRow key={t.id} task={t} isRecurring={isRecurring} projekte={projekte}
               onUpdate={onUpdate} onDelete={()=>onDelete(t.id)} onToggleComplete={()=>onToggleComplete(t.id)}/>
           ))}
         </tbody>
@@ -360,13 +383,13 @@ function TAPanel({state, dispatch, onAddTask}) {
       </div>
       <SubLabel badge="Wiederkehrend">System-Routinen</SubLabel>
       <div style={{marginBottom:20}}>
-        <TaskGrid tasks={state.recurring} isRecurring
+        <TaskGrid tasks={state.recurring} isRecurring projekte={state.projekte||[]}
           onUpdate={t=>dispatch({type:'UPDATE_RECURRING',task:t})}
           onDelete={id=>dispatch({type:'DELETE_RECURRING',id})}
           onToggleComplete={id=>dispatch({type:'TOGGLE_RECURRING',id})}/>
       </div>
       <SubLabel>Aufgaben dieser Woche</SubLabel>
-      <TaskGrid tasks={state.ta}
+      <TaskGrid tasks={state.ta} projekte={state.projekte||[]}
         onUpdate={t=>dispatch({type:'UPDATE_TA',task:t})}
         onDelete={id=>dispatch({type:'DELETE_TA',id})}
         onToggleComplete={id=>dispatch({type:'TOGGLE_TA',id})}/>
@@ -397,7 +420,7 @@ function ZAPanel({state, dispatch, onAddTask}) {
                 </button>
               </div>
               <div style={{padding:12}}>
-                <TaskGrid tasks={state.za[w]||[]}
+                <TaskGrid tasks={state.za[w]||[]} projekte={state.projekte||[]}
                   onUpdate={t=>dispatch({type:'UPDATE_ZA',task:t,weekIdx:w})}
                   onDelete={id=>dispatch({type:'DELETE_ZA',id,weekIdx:w})}
                   onToggleComplete={id=>dispatch({type:'TOGGLE_ZA',id,weekIdx:w})}/>
@@ -678,7 +701,7 @@ function reducer(state, action) {
     case 'ADD_RECURRING': return {...state,recurring:[...state.recurring,makeTask()]};
     case 'UPDATE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.task.id?action.task:t)};
     case 'DELETE_RECURRING': return {...state,recurring:state.recurring.filter(t=>t.id!==action.id)};
-    case 'TOGGLE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.id?{...t,completed:!t.completed}:t)};
+    case 'TOGGLE_RECURRING': return {...state,recurring:state.recurring.map(t=>t.id===action.id?{...t,completed:!t.completed,completedAt:t.completed?null:new Date().toISOString()}:t)};
     case 'ADD_ZA': { const za=[...state.za]; za[action.weekIdx]=[...(za[action.weekIdx]||[]),makeTask(action.task)]; return {...state,za}; }
     case 'UPDATE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).map(t=>t.id===action.task.id?action.task:t); return {...state,za}; }
     case 'DELETE_ZA': { const za=[...state.za]; za[action.weekIdx]=(za[action.weekIdx]||[]).filter(t=>t.id!==action.id); return {...state,za}; }
