@@ -389,7 +389,16 @@ function TAPanel({state, dispatch, onAddTask}) {
           onToggleComplete={id=>dispatch({type:'TOGGLE_RECURRING',id})}/>
       </div>
       <SubLabel>Aufgaben dieser Woche</SubLabel>
-      <TaskGrid tasks={state.ta} projekte={state.projekte||[]}
+      <TaskGrid tasks={[...state.ta].sort((a,b)=>{
+        // Priority order: III=3, II=2, I=1, D=0.5, ''=0 — delegated after non-delegated of same priority
+        function score(t) {
+          const hasD = t.days.some(d=>d.priority==='D');
+          const typScore = t.typ==='III'?3:t.typ==='II'?2:t.typ==='I'?1:0;
+          const delegScore = hasD ? -0.5 : 0;
+          return typScore + delegScore;
+        }
+        return score(b) - score(a);
+      })} projekte={state.projekte||[]}
         onUpdate={t=>dispatch({type:'UPDATE_TA',task:t})}
         onDelete={id=>dispatch({type:'DELETE_TA',id})}
         onToggleComplete={id=>dispatch({type:'TOGGLE_TA',id})}/>
