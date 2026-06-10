@@ -390,12 +390,17 @@ function TAPanel({state, dispatch, onAddTask}) {
       </div>
       <SubLabel>Aufgaben dieser Woche</SubLabel>
       <TaskGrid tasks={[...state.ta].sort((a,b)=>{
-        // Priority order: III=3, II=2, I=1, D=0.5, ''=0 — delegated after non-delegated of same priority
+        function prioVal(p) { return p==='III'?3:p==='II'?2:p==='I'?1:p==='D'?0.5:0; }
         function score(t) {
-          const hasD = t.days.some(d=>d.priority==='D');
-          const typScore = t.typ==='III'?3:t.typ==='II'?2:t.typ==='I'?1:0;
-          const delegScore = hasD ? -0.5 : 0;
-          return typScore + delegScore;
+          // Use W column if set, otherwise highest day priority
+          const wScore = prioVal(t.typ);
+          const dayScores = t.days.map(d=>prioVal(d.priority));
+          const bestDay = Math.max(...dayScores);
+          const base = wScore > 0 ? wScore : bestDay;
+          // Delegated tasks get a small penalty to sort after non-delegated of same priority
+          const allD = t.days.every(d=>!d.priority||d.priority==='D');
+          const hasD = t.days.some(d=>d.priority==='D') && allD;
+          return base - (hasD ? 0.3 : 0);
         }
         return score(b) - score(a);
       })} projekte={state.projekte||[]}
