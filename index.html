@@ -54,7 +54,7 @@ select:focus{outline:none;}
 <!-- React -->
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
 
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
@@ -324,8 +324,8 @@ function AddTaskModal({open, target, onClose, onSave, projekte=[]}) {
   const [priority,setPriority]=useState('');
   const [name,setName]=useState('');
   const [zaWeek,setZaWeek]=useState(0);
-  useEffect(()=>{if(open){setAktivitat('');setTyp('');setDay('');setPriority('');setName('');setZaWeek(0);setProjektId('');}},[open]);
   const [projektId,setProjektId]=useState('');
+  useEffect(()=>{if(open){setAktivitat('');setTyp('');setDay('');setPriority('');setName('');setZaWeek(0);setProjektId('');}},[open]);
   function save() {
     if(!aktivitat.trim()) return;
     const days=Array(7).fill(null).map(()=>({priority:'',carried:false}));
@@ -392,12 +392,10 @@ function TAPanel({state, dispatch, onAddTask}) {
       <TaskGrid tasks={[...state.ta].sort((a,b)=>{
         function prioVal(p) { return p==='III'?3:p==='II'?2:p==='I'?1:p==='D'?0.5:0; }
         function score(t) {
-          // Use W column if set, otherwise highest day priority
           const wScore = prioVal(t.typ);
           const dayScores = t.days.map(d=>prioVal(d.priority));
           const bestDay = Math.max(...dayScores);
           const base = wScore > 0 ? wScore : bestDay;
-          // Delegated tasks get a small penalty to sort after non-delegated of same priority
           const allD = t.days.every(d=>!d.priority||d.priority==='D');
           const hasD = t.days.some(d=>d.priority==='D') && allD;
           return base - (hasD ? 0.3 : 0);
@@ -573,7 +571,6 @@ function ProjektePanel({state, dispatch}) {
     setNewName(''); setNewZielId(''); setShowForm(false);
   }
 
-  // Collect all tasks across TA and ZA for a given projekt
   function getTasksForProjekt(projektId) {
     const taTasks = state.ta.filter(t=>t.projektId===projektId);
     const zaTasks = state.za.flat().filter(t=>t.projektId===projektId);
@@ -807,7 +804,6 @@ function App() {
 
   const suppressIncoming = useRef(false);
 
-  // Real-time listener from Firebase
   useEffect(()=>{
     function setup() {
       const { db, doc, onSnapshot } = window._firestore;
@@ -836,7 +832,6 @@ function App() {
     return () => { if (unsub) unsub(); };
   },[]);
 
-  // Save to Firebase with debounce (only after initial load)
   useEffect(()=>{
     if (!loaded) return;
     setSyncStatus('syncing');
