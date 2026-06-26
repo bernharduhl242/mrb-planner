@@ -542,8 +542,7 @@ function ProjektePanel({state, dispatch}) {
 
   function startEdit(p) {
     setEditName(p.name);
-    setEditZielId(p.zielId||'');
-    setEditing(true);
+    setEditZielId(p.zielId||'');    setEditing(true);
   }
   function saveEdit() {
     if (!editName.trim()) return;
@@ -574,6 +573,26 @@ function ProjektePanel({state, dispatch}) {
     const z = state.z.find(z=>z.id===zielId);
     return z ? z.text : null;
   };
+
+  function exportCSV(projekt, doneTasks) {
+    const esc = (v) => `"${String(v??'').replace(/"/g,'""')}"`;
+    const header = ['Aktivität','Erledigt am','Delegiert an','Projekt'];
+    const rows = doneTasks.map(t => [
+      t.aktivitat,
+      t.completedAt ? fmtDate(new Date(t.completedAt)) : '',
+      t.name || '',
+      projekt.name
+    ]);
+    const csv = [header, ...rows].map(r=>r.map(esc).join(',')).join('\r\n');
+    const blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const safeName = projekt.name.replace(/[^a-z0-9äöüß]/gi,'_');
+    const dateStr = new Date().toISOString().slice(0,10);
+    a.href = url; a.download = `${safeName}_erledigt_${dateStr}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
 
   if (selectedProjekt) {
     const tasks = getTasksForProjekt(selectedProjekt.id);
@@ -628,9 +647,14 @@ function ProjektePanel({state, dispatch}) {
             </div>
           ))}
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8,cursor:'pointer'}} onClick={()=>setShowAbgeschlossen(!showAbgeschlossen)}>
-          <SubLabel>Abgeschlossen</SubLabel>
-          <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>{showAbgeschlossen?'▲':'▼'} {done.length}</span>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}>
+          <div style={{display:'flex',alignItems:'center',gap:12,cursor:'pointer'}} onClick={()=>setShowAbgeschlossen(!showAbgeschlossen)}>
+            <SubLabel>Abgeschlossen</SubLabel>
+            <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>{showAbgeschlossen?'▲':'▼'} {done.length}</span>
+          </div>
+          {done.length>0&&(
+            <Btn variant="accent" style={{fontSize:'0.6rem',padding:'4px 10px',marginLeft:'auto'}} onClick={()=>exportCSV(selectedProjekt,done)}>⬇ CSV Export</Btn>
+          )}
         </div>
         {showAbgeschlossen&&(
           done.length===0?(
