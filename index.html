@@ -383,25 +383,13 @@ function TAPanel({state, dispatch, onAddTask}) {
       </div>
       <SubLabel badge="Wiederkehrend">System-Routinen</SubLabel>
       <div style={{marginBottom:20}}>
-        <TaskGrid tasks={state.recurring} isRecurring projekte={state.projekte||[]}
+        <TaskGrid tasks={state.recurring.filter(t=>!t.completed)} isRecurring projekte={state.projekte||[]}
           onUpdate={t=>dispatch({type:'UPDATE_RECURRING',task:t})}
           onDelete={id=>dispatch({type:'DELETE_RECURRING',id})}
           onToggleComplete={id=>dispatch({type:'TOGGLE_RECURRING',id})}/>
       </div>
       <SubLabel>Aufgaben dieser Woche</SubLabel>
-      <TaskGrid tasks={[...state.ta].sort((a,b)=>{
-        function prioVal(p) { return p==='III'?3:p==='II'?2:p==='I'?1:p==='D'?0.5:0; }
-        function score(t) {
-          const wScore = prioVal(t.typ);
-          const dayScores = t.days.map(d=>prioVal(d.priority));
-          const bestDay = Math.max(...dayScores);
-          const base = wScore > 0 ? wScore : bestDay;
-          const allD = t.days.every(d=>!d.priority||d.priority==='D');
-          const hasD = t.days.some(d=>d.priority==='D') && allD;
-          return base - (hasD ? 0.3 : 0);
-        }
-        return score(b) - score(a);
-      })} projekte={state.projekte||[]}
+      <TaskGrid tasks={state.ta.filter(t=>!t.completed)} projekte={state.projekte||[]}
         onUpdate={t=>dispatch({type:'UPDATE_TA',task:t})}
         onDelete={id=>dispatch({type:'DELETE_TA',id})}
         onToggleComplete={id=>dispatch({type:'TOGGLE_TA',id})}/>
