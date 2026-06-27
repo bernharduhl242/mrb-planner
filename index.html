@@ -455,7 +455,7 @@ function ZPanel({state, dispatch}) {
   );
 }
 
-function PAPanel({state, dispatch}) {
+function PAPanel({state, dispatch, projekte=[]}) {
   const cardStyle={border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden'};
   const cardHeader=(title,sub)=>(
     <div style={{background:'var(--ink)',color:'var(--paper)',padding:'10px 16px',display:'flex',alignItems:'center',gap:12}}>
@@ -507,11 +507,20 @@ function PAPanel({state, dispatch}) {
                 </div>
                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
                   {state.pa[key].tasks.map((task,ti)=>(
-                    <div key={task.id} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 8px',borderRadius:2}}>
+                    <div key={task.id} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 8px',borderRadius:2,flexWrap:'wrap'}}>
                       <input type="checkbox" checked={task.done} onChange={e=>dispatch({type:'TOGGLE_PA_TASK',key,ti,done:e.target.checked})}
                         style={{width:18,height:18,accentColor:'var(--accent)',cursor:'pointer',flexShrink:0}}/>
                       <input value={task.text} placeholder="Aufgabe..." onChange={e=>dispatch({type:'UPDATE_PA_TASK',key,ti,text:e.target.value})}
-                        style={{flex:1,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:task.done?'var(--ink-faint)':'var(--ink)',textDecoration:task.done?'line-through':'none',padding:0}}/>
+                        style={{flex:1,minWidth:120,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:task.done?'var(--ink-faint)':'var(--ink)',textDecoration:task.done?'line-through':'none',padding:0}}/>
+                      {projekte.length>0&&(
+                        <select value={task.projektId||''} onChange={e=>dispatch({type:'SET_PA_TASK_PROJEKT',key,ti,projektId:e.target.value||null})}
+                          style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',border:'1px solid var(--border)',background:task.projektId?'var(--accent-faint)':'var(--paper)',color:task.projektId?'var(--accent)':'var(--ink-faint)',padding:'3px 6px',borderRadius:2,maxWidth:130}}>
+                          <option value="">— Projekt —</option>
+                          {projekte.filter(p=>p.status==='aktiv').map(p=>(
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      )}
                       <button onClick={()=>dispatch({type:'DELETE_PA_TASK',key,ti})}
                         style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.7rem',borderRadius:2}}>×</button>
                     </div>
@@ -558,15 +567,33 @@ function ProjektePanel({state, dispatch}) {
     setNewName(''); setNewZielId(''); setShowForm(false);
   }
 
+  const PA_INTERVAL_LABELS = {monthly:'Monatlich',sixmonth:'Halbjährlich',yearly:'Jährlich'};
+  const PA_BADGE_STYLE = {
+    monthly:{color:'#2040a0',bg:'#e8f0ff'},
+    sixmonth:{color:'#804010',bg:'#fff0e0'},
+    yearly:{color:'var(--accent)',bg:'var(--accent-faint)'},
+  };
+  function getPATasksForProjekt(projektId) {
+    const result = [];
+    ['monthly','sixmonth','yearly'].forEach(key=>{
+      (state.pa[key].tasks||[]).filter(t=>t.projektId===projektId).forEach(t=>{
+        result.push({id:t.id, aktivitat:t.text, completed:false, isPA:true, paInterval:key, typ:'', name:''});
+      });
+    });
+    return result;
+  }
   function getTasksForProjekt(projektId) {
     const taTasks = state.ta.filter(t=>t.projektId===projektId);
     const zaTasks = state.za.flat().filter(t=>t.projektId===projektId);
     const recurringTasks = (state.recurring||[]).filter(t=>t.projektId===projektId);
-    return [...recurringTasks, ...taTasks, ...zaTasks];
+    const paTasks = getPATasksForProjekt(projektId);
+    return [...paTasks, ...recurringTasks, ...taTasks, ...zaTasks];
   }
 
-  const aktiveProjekte = (state.projekte||[]).filter(p=>p.status==='aktiv');
-  const abgeschlosseneProjekte = (state.projekte||[]).filter(p=>p.status==='abgeschlossen');
+  const [searchTerm, setSearchTerm] = useState('');
+  const term = searchTerm.trim().toLowerCase();
+  const aktiveProjekte = (state.projekte||[]).filter(p=>p.status==='aktiv' && (!term || p.name.toLowerCase().includes(term)));
+  const abgeschlosseneProjekte = (state.projekte||[]).filter(p=>p.status==='abgeschlossen' && (!term || p.name.toLowerCase().includes(term)));
 
   const zielText = (zielId) => {
     if (!zielId) return null;
@@ -642,6 +669,7 @@ function ProjektePanel({state, dispatch}) {
           ):aktiv.map(t=>(
             <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',marginBottom:4,border:'1px solid var(--border)',borderRadius:3,background:'var(--paper)'}}>
               <div style={{flex:1,fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink)'}}>{t.aktivitat}</div>
+              {t.isPA&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',padding:'2px 8px',borderRadius:10,background:PA_BADGE_STYLE[t.paInterval].bg,color:PA_BADGE_STYLE[t.paInterval].color}}>{PA_INTERVAL_LABELS[t.paInterval]}</span>}
               {t.typ&&<span style={{fontFamily:"'DM Serif Display',serif",fontSize:'0.8rem',color:'var(--gold)'}}>{t.typ}</span>}
               {t.name&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.65rem',color:'var(--ink-faint)'}}>→ {t.name}</span>}
             </div>
@@ -676,6 +704,11 @@ function ProjektePanel({state, dispatch}) {
         <Btn variant="primary" onClick={()=>setShowForm(!showForm)}>+ Projekt</Btn>
       </SectionHeader>
 
+      <div style={{marginBottom:20}}>
+        <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="Projekt suchen..."
+          style={{width:'100%',fontFamily:"'DM Mono',monospace",fontSize:'0.78rem',border:'1.5px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'8px 12px',borderRadius:2}}/>
+      </div>
+
       {showForm&&(
         <div style={{border:'1.5px solid var(--border)',borderRadius:3,padding:16,marginBottom:24,background:'var(--paper-warm)'}}>
           <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1rem',marginBottom:12,color:'var(--ink)'}}>Neues Projekt</div>
@@ -703,8 +736,10 @@ function ProjektePanel({state, dispatch}) {
         </div>
       )}
 
-      {aktiveProjekte.length===0&&!showForm&&(
-        <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',textAlign:'center',padding:40,letterSpacing:'0.06em'}}>Keine Projekte · Klicke "+ Projekt"</div>
+      {aktiveProjekte.length===0&&abgeschlosseneProjekte.length===0&&!showForm&&(
+        <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',textAlign:'center',padding:40,letterSpacing:'0.06em'}}>
+          {term ? `Keine Projekte gefunden für "${searchTerm}"` : 'Keine Projekte · Klicke "+ Projekt"'}
+        </div>
       )}
 
       <div style={{display:'flex',flexDirection:'column',gap:8}}>
@@ -788,9 +823,10 @@ function reducer(state, action) {
     case 'UPDATE_IMPULSE': return {...state,impulse:state.impulse.map((e,i)=>i===action.i?{...e,text:action.text}:e)};
     case 'ADD_IMPULSE': return {...state,impulse:[...state.impulse,{id:uid(),text:''}]};
     case 'DELETE_IMPULSE': return {...state,impulse:state.impulse.filter((_,i)=>i!==action.i)};
-    case 'ADD_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:[...state.pa[action.key].tasks,{id:uid(),text:'',done:false}]}}};
+    case 'ADD_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:[...state.pa[action.key].tasks,{id:uid(),text:'',done:false,projektId:null}]}}};
     case 'DELETE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.filter((_,i)=>i!==action.ti)}}};
     case 'UPDATE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,text:action.text}:t)}}};
+    case 'SET_PA_TASK_PROJEKT': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,projektId:action.projektId}:t)}}};
     case 'TOGGLE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,done:action.done}:t)}}};
     case 'RESET_PA': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map(t=>({...t,done:false})),lastReset:new Date().toISOString()}}};
     case 'ADD_PROJEKT': return {...state,projekte:[...(state.projekte||[]),{id:uid(),name:action.name,zielId:action.zielId||null,status:'aktiv'}]};
@@ -916,7 +952,7 @@ function App() {
         {tab==='ta'&&<TAPanel state={state} dispatch={dispatch} onAddTask={setModal}/>}
         {tab==='za'&&<ZAPanel state={state} dispatch={dispatch} onAddTask={setModal}/>}
         {tab==='z'&& <ZPanel  state={state} dispatch={dispatch}/>}
-        {tab==='pa'&&<PAPanel state={state} dispatch={dispatch}/>}
+        {tab==='pa'&&<PAPanel state={state} dispatch={dispatch} projekte={state.projekte||[]}/>}
         {tab==='pr'&&<ProjektePanel state={state} dispatch={dispatch}/>}
       </div>
       <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask} projekte={state.projekte||[]}/>
