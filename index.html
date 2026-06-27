@@ -109,12 +109,39 @@ function emptyState() {
   ];
   const z = Array(12).fill(null).map(()=>({id:uid(),text:''}));
   const impulse = Array(6).fill(null).map(()=>({id:uid(),text:''}));
-  const pa = {
-    monthly:  { tasks:[{id:uid(),text:'Kreditkarten bezahlen',done:false},{id:uid(),text:'Geburtstage prüfen',done:false}], lastReset:null },
-    sixmonth: { tasks:[{id:uid(),text:'Versicherungen prüfen',done:false}], lastReset:null },
-    yearly:   { tasks:[{id:uid(),text:'Z · Ziele überprüfen',done:false}], lastReset:null },
-  };
-  return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, pa, projekte:[] };
+  const paDefs = [
+    {id:uid(), text:'Kreditkarten bezahlen', freq:'monthly', nextDue:new Date().toISOString().slice(0,10), projektId:null, generatedTaskId:null},
+    {id:uid(), text:'Geburtstage prüfen', freq:'monthly', nextDue:new Date().toISOString().slice(0,10), projektId:null, generatedTaskId:null},
+    {id:uid(), text:'Versicherungen prüfen', freq:'sixmonth', nextDue:new Date().toISOString().slice(0,10), projektId:null, generatedTaskId:null},
+    {id:uid(), text:'Z · Ziele überprüfen', freq:'yearly', nextDue:new Date().toISOString().slice(0,10), projektId:null, generatedTaskId:null},
+  ];
+  return { weekStart:getMonday(new Date()).toISOString(), ta:[], recurring, za:[[],[],[],[]], z, impulse, paDefs, projekte:[] };
+}
+
+function addInterval(dateStr, freq) {
+  const d = new Date(dateStr+'T00:00:00');
+  if (freq==='monthly') d.setMonth(d.getMonth()+1);
+  else if (freq==='sixmonth') d.setMonth(d.getMonth()+6);
+  else if (freq==='yearly') d.setFullYear(d.getFullYear()+1);
+  return d.toISOString().slice(0,10);
+}
+
+function migrateState(s) {
+  if (!s.projekte) s.projekte = [];
+  if (!s.paDefs) {
+    const today = new Date().toISOString().slice(0,10);
+    const defs = [];
+    if (s.pa) {
+      ['monthly','sixmonth','yearly'].forEach(freq=>{
+        (s.pa[freq]?.tasks||[]).forEach(t=>{
+          if (!t.text) return;
+          defs.push({id:t.id||uid(), text:t.text, freq, nextDue:today, projektId:t.projektId||null, generatedTaskId:null});
+        });
+      });
+    }
+    s.paDefs = defs;
+  }
+  return s;
 }
 
 // ── SVG ──
@@ -456,6 +483,11 @@ function ZPanel({state, dispatch}) {
 }
 
 function PAPanel({state, dispatch, projekte=[]}) {
+  const [newText, setNewText] = useState('');
+  const [newFreq, setNewFreq] = useState('monthly');
+  const [newStart, setNewStart] = useState(new Date().toISOString().slice(0,10));
+  const [newProjekt, setNewProjekt] = useState('');
+
   const cardStyle={border:'1.5px solid var(--border)',borderRadius:3,overflow:'hidden'};
   const cardHeader=(title,sub)=>(
     <div style={{background:'var(--ink)',color:'var(--paper)',padding:'10px 16px',display:'flex',alignItems:'center',gap:12}}>
@@ -463,14 +495,25 @@ function PAPanel({state, dispatch, projekte=[]}) {
       <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',color:'var(--ink-faint)',letterSpacing:'0.1em'}}>{sub}</div>
     </div>
   );
-  const intervals=[
-    {key:'monthly', label:'Monatlich',   badge:'Jeden Monat',    badgeColor:'#2040a0',badgeBg:'#e8f0ff'},
-    {key:'sixmonth',label:'Halbjährlich',badge:'Alle 6 Monate',  badgeColor:'#804010',badgeBg:'#fff0e0'},
-    {key:'yearly',  label:'Jährlich',    badge:'Einmal im Jahr', badgeColor:'var(--accent)',badgeBg:'var(--accent-faint)'},
-  ];
+  const FREQ_LABELS={monthly:'Monatlich',sixmonth:'Halbjährlich',yearly:'Jährlich'};
+  const FREQ_BADGE={
+    monthly:{color:'#2040a0',bg:'#e8f0ff'},
+    sixmonth:{color:'#804010',bg:'#fff0e0'},
+    yearly:{color:'var(--accent)',bg:'var(--accent-faint)'},
+  };
+
+  function addDef() {
+    if (!newText.trim()) return;
+    dispatch({type:'ADD_PADEF', text:newText.trim(), freq:newFreq, startDate:newStart, projektId:newProjekt||null});
+    setNewText(''); setNewStart(new Date().toISOString().slice(0,10));
+  }
+
+  const fieldLabel=(txt)=><label style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',letterSpacing:'0.12em',textTransform:'uppercase',color:'var(--ink-faint)',display:'block',marginBottom:4}}>{txt}</label>;
+  const fieldStyle={fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',border:'1px solid var(--border)',background:'var(--paper)',color:'var(--ink)',padding:'6px 10px',borderRadius:2,width:'100%'};
+
   return (
     <div>
-      <SectionHeader title="Periodische Aktivitäten" meta="Impulse · Wiederkehrende Aufgaben"/>
+      <SectionHeader title="Periodische Aktivitäten" meta="Impulse · Monatlich · Halbjährlich · Jährlich"/>
       <div style={{display:'flex',flexDirection:'column',gap:32}}>
         <div style={cardStyle}>
           {cardHeader('Impulse','Motivation · Positive Gedanken')}
@@ -494,43 +537,52 @@ function PAPanel({state, dispatch, projekte=[]}) {
           </div>
         </div>
         <div style={cardStyle}>
-          {cardHeader('PA-M · Periodische Aufgaben','Monatlich · Halbjährlich · Jährlich')}
+          {cardHeader('PA-M · Periodische Aufgaben','Werden automatisch in TA eingeplant')}
           <div style={{padding:16,background:'var(--paper)'}}>
-            {intervals.map(({key,label,badge,badgeColor,badgeBg},ii)=>(
-              <div key={key} style={{marginBottom:ii<2?24:0}}>
-                <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,paddingBottom:8,borderBottom:'1px solid var(--paper-grid)',flexWrap:'wrap'}}>
-                  <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',letterSpacing:'0.1em',textTransform:'uppercase',color:'var(--ink)',flex:1}}>{label}</span>
-                  <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',padding:'2px 8px',borderRadius:10,background:badgeBg,color:badgeColor}}>{badge}</span>
-                  {state.pa[key].lastReset&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',color:'var(--ink-faint)'}}>Zuletzt: {fmtDate(new Date(state.pa[key].lastReset))}</span>}
-                  <button onClick={()=>{if(window.confirm(`Alle ${label.toLowerCase()} Aufgaben zurücksetzen?`)) dispatch({type:'RESET_PA',key});}}
-                    style={{fontFamily:"'DM Mono',monospace",fontSize:'0.58rem',letterSpacing:'0.1em',padding:'3px 10px',border:'1.5px solid var(--gold)',background:'transparent',color:'var(--gold)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>↺ Zurücksetzen</button>
+            <div style={{display:'flex',flexDirection:'column',gap:6,marginBottom:20}}>
+              {state.paDefs.length===0&&(
+                <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',padding:'12px 0',letterSpacing:'0.06em'}}>Keine periodischen Aufgaben definiert</div>
+              )}
+              {state.paDefs.map(def=>{
+                const isPending = !def.generatedTaskId;
+                const proj = projekte.find(p=>p.id===def.projektId);
+                return (
+                  <div key={def.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',border:'1px solid var(--paper-grid)',borderRadius:2,flexWrap:'wrap'}}>
+                    <div style={{flex:1,minWidth:140,fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:'var(--ink)'}}>{def.text}</div>
+                    <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',padding:'2px 8px',borderRadius:10,background:FREQ_BADGE[def.freq].bg,color:FREQ_BADGE[def.freq].color}}>{FREQ_LABELS[def.freq]}</span>
+                    {proj&&<span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',color:'var(--accent)'}}>↗ {proj.name}</span>}
+                    <span style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',color:'var(--ink-faint)'}}>
+                      {isPending ? `Fällig: ${fmtDate(new Date(def.nextDue+'T00:00:00'))}` : '→ in TA aktiv'}
+                    </span>
+                    <button onClick={()=>{if(window.confirm(`"${def.text}" wirklich löschen?`)) dispatch({type:'DELETE_PADEF',id:def.id});}}
+                      style={{width:20,height:20,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.75rem',borderRadius:2}}>×</button>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{borderTop:'1px solid var(--paper-grid)',paddingTop:16}}>
+              <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.1em',textTransform:'uppercase',color:'var(--ink-faint)',marginBottom:10}}>Neue periodische Aufgabe</div>
+              <div style={{display:'grid',gridTemplateColumns:'2fr 1fr 1fr',gap:10,marginBottom:10}}>
+                <div>{fieldLabel('Aufgabe')}<input value={newText} onChange={e=>setNewText(e.target.value)} placeholder="z.B. Steuerunterlagen sortieren" style={fieldStyle} onKeyDown={e=>e.key==='Enter'&&addDef()}/></div>
+                <div>{fieldLabel('Frequenz')}
+                  <select value={newFreq} onChange={e=>setNewFreq(e.target.value)} style={fieldStyle}>
+                    <option value="monthly">Monatlich</option>
+                    <option value="sixmonth">Halbjährlich</option>
+                    <option value="yearly">Jährlich</option>
+                  </select>
                 </div>
-                <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                  {state.pa[key].tasks.map((task,ti)=>(
-                    <div key={task.id} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 8px',borderRadius:2,flexWrap:'wrap'}}>
-                      <input type="checkbox" checked={task.done} onChange={e=>dispatch({type:'TOGGLE_PA_TASK',key,ti,done:e.target.checked})}
-                        style={{width:18,height:18,accentColor:'var(--accent)',cursor:'pointer',flexShrink:0}}/>
-                      <input value={task.text} placeholder="Aufgabe..." onChange={e=>dispatch({type:'UPDATE_PA_TASK',key,ti,text:e.target.value})}
-                        style={{flex:1,minWidth:120,border:'none',background:'transparent',fontFamily:"'Instrument Sans',sans-serif",fontSize:'0.85rem',color:task.done?'var(--ink-faint)':'var(--ink)',textDecoration:task.done?'line-through':'none',padding:0}}/>
-                      {projekte.length>0&&(
-                        <select value={task.projektId||''} onChange={e=>dispatch({type:'SET_PA_TASK_PROJEKT',key,ti,projektId:e.target.value||null})}
-                          style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',border:'1px solid var(--border)',background:task.projektId?'var(--accent-faint)':'var(--paper)',color:task.projektId?'var(--accent)':'var(--ink-faint)',padding:'3px 6px',borderRadius:2,maxWidth:130}}>
-                          <option value="">— Projekt —</option>
-                          {projekte.filter(p=>p.status==='aktiv').map(p=>(
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      )}
-                      <button onClick={()=>dispatch({type:'DELETE_PA_TASK',key,ti})}
-                        style={{width:18,height:18,border:'none',background:'transparent',cursor:'pointer',color:'var(--ink-faint)',fontSize:'0.7rem',borderRadius:2}}>×</button>
-                    </div>
-                  ))}
-                </div>
-                <div style={{marginTop:6}}>
-                  <Btn style={{borderStyle:'dashed',fontSize:'0.62rem',padding:'3px 10px'}} onClick={()=>dispatch({type:'ADD_PA_TASK',key})}>+ Aufgabe</Btn>
-                </div>
+                <div>{fieldLabel('Startdatum')}<input type="date" value={newStart} onChange={e=>setNewStart(e.target.value)} style={fieldStyle}/></div>
               </div>
-            ))}
+              {projekte.length>0&&(
+                <div style={{marginBottom:10,maxWidth:240}}>{fieldLabel('Projekt (optional)')}
+                  <select value={newProjekt} onChange={e=>setNewProjekt(e.target.value)} style={fieldStyle}>
+                    <option value="">— Kein Projekt —</option>
+                    {projekte.filter(p=>p.status==='aktiv').map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <Btn variant="primary" onClick={addDef}>+ Periodische Aufgabe</Btn>
+            </div>
           </div>
         </div>
       </div>
@@ -574,13 +626,9 @@ function ProjektePanel({state, dispatch}) {
     yearly:{color:'var(--accent)',bg:'var(--accent-faint)'},
   };
   function getPATasksForProjekt(projektId) {
-    const result = [];
-    ['monthly','sixmonth','yearly'].forEach(key=>{
-      (state.pa[key].tasks||[]).filter(t=>t.projektId===projektId).forEach(t=>{
-        result.push({id:t.id, aktivitat:t.text, completed:false, isPA:true, paInterval:key, typ:'', name:''});
-      });
-    });
-    return result;
+    return (state.paDefs||[]).filter(d=>d.projektId===projektId && !d.generatedTaskId).map(d=>(
+      {id:d.id, aktivitat:d.text, completed:false, isPA:true, paInterval:d.freq, typ:'', name:''}
+    ));
   }
   function getTasksForProjekt(projektId) {
     const taTasks = state.ta.filter(t=>t.projektId===projektId);
@@ -823,12 +871,9 @@ function reducer(state, action) {
     case 'UPDATE_IMPULSE': return {...state,impulse:state.impulse.map((e,i)=>i===action.i?{...e,text:action.text}:e)};
     case 'ADD_IMPULSE': return {...state,impulse:[...state.impulse,{id:uid(),text:''}]};
     case 'DELETE_IMPULSE': return {...state,impulse:state.impulse.filter((_,i)=>i!==action.i)};
-    case 'ADD_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:[...state.pa[action.key].tasks,{id:uid(),text:'',done:false,projektId:null}]}}};
-    case 'DELETE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.filter((_,i)=>i!==action.ti)}}};
-    case 'UPDATE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,text:action.text}:t)}}};
-    case 'SET_PA_TASK_PROJEKT': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,projektId:action.projektId}:t)}}};
-    case 'TOGGLE_PA_TASK': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map((t,i)=>i===action.ti?{...t,done:action.done}:t)}}};
-    case 'RESET_PA': return {...state,pa:{...state.pa,[action.key]:{...state.pa[action.key],tasks:state.pa[action.key].tasks.map(t=>({...t,done:false})),lastReset:new Date().toISOString()}}};
+    case 'ADD_PADEF': return {...state, paDefs:[...state.paDefs,{id:uid(),text:action.text,freq:action.freq,nextDue:action.startDate,projektId:action.projektId||null,generatedTaskId:null}]};
+    case 'UPDATE_PADEF': return {...state, paDefs:state.paDefs.map(d=>d.id===action.id?{...d,...action.changes}:d)};
+    case 'DELETE_PADEF': return {...state, paDefs:state.paDefs.filter(d=>d.id!==action.id)};
     case 'ADD_PROJEKT': return {...state,projekte:[...(state.projekte||[]),{id:uid(),name:action.name,zielId:action.zielId||null,status:'aktiv'}]};
     case 'UPDATE_PROJEKT': return {...state,projekte:(state.projekte||[]).map(p=>p.id===action.projekt.id?action.projekt:p)};
     case 'DELETE_PROJEKT': return {...state,projekte:(state.projekte||[]).filter(p=>p.id!==action.id),ta:state.ta.map(t=>t.projektId===action.id?{...t,projektId:null}:t),za:state.za.map(w=>w.map(t=>t.projektId===action.id?{...t,projektId:null}:t))};
@@ -861,7 +906,7 @@ function App() {
         if (snap.exists()) {
           try {
             const incoming = JSON.parse(snap.data().stateJson);
-            if (!incoming.projekte) incoming.projekte = [];
+            migrateState(incoming);
             setStateRaw(incoming);
           } catch(e) { console.error('Parse error', e); }
         }
@@ -892,10 +937,34 @@ function App() {
     }, 1500);
   },[state, loaded]);
 
-  function dispatch(action) {
-    if(action.type==='END_WEEK'){if(!window.confirm('Woche abschließen? Offene Aufgaben werden mit ZA Woche 1 zusammengeführt.')) return; showToast('Neue Woche gestartet'); setTab('ta');}
+  useEffect(()=>{
+    if (!loaded) return;
+    const today = new Date().toISOString().slice(0,10);
+    let changed = false;
+    const newTaTasks = [];
+    const updatedDefs = state.paDefs.map(def=>{
+      if (def.generatedTaskId) {
+        const stillOpen = state.ta.some(t=>t.id===def.generatedTaskId && !t.completed);
+        if (stillOpen) return def;
+        changed = true;
+        return {...def, nextDue: addInterval(def.nextDue, def.freq), generatedTaskId:null};
+      }
+      if (def.nextDue <= today && !def.generatedTaskId) {
+        const newId = uid();
+        newTaTasks.push(makeTask({id:newId, aktivitat:def.text, typ:'I', projektId:def.projektId, isPaGenerated:true}));
+        changed = true;
+        return {...def, generatedTaskId:newId};
+      }
+      return def;
+    });
+    if (changed) {
+      setStateRaw(s=>({...s, paDefs:updatedDefs, ta:[...s.ta, ...newTaTasks]}));
+    }
+  },[loaded, state.paDefs, state.ta]);
+
+  function dispatch(action) {    if(action.type==='END_WEEK'){if(!window.confirm('Woche abschließen? Offene Aufgaben werden mit ZA Woche 1 zusammengeführt.')) return; showToast('Neue Woche gestartet'); setTab('ta');}
     if(action.type==='PROMOTE_WEEK'){if(!window.confirm(`Woche ${action.weekIdx+1} nach TA übertragen?`)) return; showToast(`Woche ${action.weekIdx+1} → TA übertragen`); setTab('ta');}
-    if(action.type==='RESET_PA') showToast('Zurückgesetzt · '+new Date().toLocaleDateString('de-DE'));
+    if(action.type==='ADD_PADEF') showToast('Periodische Aufgabe gespeichert');
     setStateRaw(s=>reducer(s,action));
   }
 
