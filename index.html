@@ -891,6 +891,7 @@ function App() {
   const [modal, setModal] = useState(null);
   const [syncStatus, setSyncStatus] = useState('loading');
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const saveTimer = useRef(null);
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
@@ -908,14 +909,35 @@ function App() {
             const incoming = JSON.parse(snap.data().stateJson);
             migrateState(incoming);
             setStateRaw(incoming);
-          } catch(e) { console.error('Parse error', e); }
+            setLoadError(false);
+            setLoaded(true);
+            setSyncStatus('saved');
+          } catch(e) {
+            // Parse failed — do NOT mark as loaded, since state still holds
+            // the blank default. Marking loaded here would let the autosave
+            // effect below push that blank default back to Firestore and
+            // silently wipe real data.
+            console.error('Parse error', e);
+            setSyncStatus('error');
+            setLoadError(true);
+          }
+        } else {
+          // Document genuinely doesn't exist yet — legitimate first-ever run.
+          setLoadError(false);
+          setLoaded(true);
+          setSyncStatus('saved');
         }
-        setLoaded(true);
-        setSyncStatus('saved');
       }, (err) => {
+        // Connection/listener error. If we've never successfully loaded real
+        // data yet, do NOT mark as loaded — state is still the blank default,
+        // and marking loaded would let the autosave effect overwrite the real
+        // Firestore document with that blank state as soon as the network
+        // comes back. If we'd already loaded successfully before, leave
+        // `loaded` alone so the app keeps working with what it already has.
         console.error('Listener error', err);
         setSyncStatus('error');
-        setLoaded(true);
+        setLoadError(true);
+        setLoaded(prev => prev);
       });
       return unsubscribe;
     }
@@ -984,6 +1006,21 @@ function App() {
     {id:'pa',label:'PA',sub:'Periodische Aktivitäten'},
     {id:'pr',label:'PR',sub:'Projekte'},
   ];
+
+  if (!loaded && loadError) return (
+    <div style={{minHeight:'100vh',background:'var(--ink)',display:'flex',alignItems:'center',justifyContent:'center',padding:24}}>
+      <div style={{maxWidth:380,textAlign:'center'}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",color:'var(--paper)',fontSize:'1.1rem',marginBottom:10}}>Synchronisierung fehlgeschlagen</div>
+        <div style={{fontFamily:"'DM Mono',monospace",color:'var(--ink-faint)',fontSize:'0.72rem',lineHeight:1.6,marginBottom:18}}>
+          Verbindung zu Firebase konnte nicht hergestellt werden. Um Datenverlust zu vermeiden, wird die App nicht geöffnet. Bitte Internetverbindung prüfen und erneut versuchen.
+        </div>
+        <button onClick={()=>window.location.reload()}
+          style={{fontFamily:"'DM Mono',monospace",fontSize:'0.68rem',letterSpacing:'0.1em',padding:'8px 20px',background:'var(--paper)',color:'var(--ink)',border:'none',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+          Erneut versuchen
+        </button>
+      </div>
+    </div>
+  );
 
   if (!loaded) return (
     <div style={{minHeight:'100vh',background:'var(--ink)',display:'flex',alignItems:'center',justifyContent:'center'}}>
