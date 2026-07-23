@@ -33,7 +33,7 @@ select:focus{outline:none;}
 <!-- Firebase -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, getDocs, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCSGHhQnmo3ZRga_WsgawwJmx4F4zEHyH0",
@@ -47,7 +47,7 @@ select:focus{outline:none;}
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
 
-  window._firestore = { db, doc, getDoc, setDoc, onSnapshot };
+  window._firestore = { db, doc, getDoc, setDoc, onSnapshot, collection, getDocs, deleteDoc, query, orderBy };
   window.dispatchEvent(new Event('firebaseReady'));
 </script>
 
@@ -77,6 +77,60 @@ async function fbSave(state) {
     const { db, doc, setDoc } = window._firestore;
     await setDoc(doc(db, COLLECTION, DOC_ID), { stateJson: JSON.stringify(state) });
   } catch(e) { console.error('Firebase save error', e); }
+}
+
+const BACKUP_RETENTION_DAYS = 30;
+
+// Writes (or overwrites) today's daily snapshot, then trims anything older
+// than BACKUP_RETENTION_DAYS. Best-effort: failures here must never block
+// the main save.
+async function runDailyBackup(state) {
+  try {
+    const { db, doc, setDoc, collection, getDocs, deleteDoc, query, orderBy } = window._firestore;
+    const todayStr = new Date().toISOString().slice(0,10);
+    const backupRef = doc(db, COLLECTION, DOC_ID, 'backups', todayStr);
+    await setDoc(backupRef, { stateJson: JSON.stringify(state), savedAt: new Date().toISOString() });
+
+    const backupsCol = collection(db, COLLECTION, DOC_ID, 'backups');
+    const snap = await getDocs(query(backupsCol, orderBy('savedAt','desc')));
+    const extra = snap.docs.slice(BACKUP_RETENTION_DAYS);
+    for (const d of extra) { await deleteDoc(d.ref); }
+  } catch(e) { console.error('Backup error', e); }
+}
+
+async function fetchBackupList() {
+  try {
+    const { db, collection, getDocs, query, orderBy } = window._firestore;
+    const backupsCol = collection(db, COLLECTION, DOC_ID, 'backups');
+    const snap = await getDocs(query(backupsCol, orderBy('savedAt','desc')));
+    return snap.docs.map(d=>({ id:d.id, savedAt:d.data().savedAt }));
+  } catch(e) { console.error('Backup list error', e); return null; }
+}
+
+async function fetchBackupState(backupId) {
+  try {
+    const { db, doc, getDoc } = window._firestore;
+    const snap = await getDoc(doc(db, COLLECTION, DOC_ID, 'backups', backupId));
+    if (!snap.exists()) return null;
+    const parsed = JSON.parse(snap.data().stateJson);
+    migrateState(parsed);
+    return parsed;
+  } catch(e) { console.error('Backup restore error', e); return null; }
+}
+
+// Rough count of "meaningful entries" across the whole state, used only to
+// detect a suspicious drop in data before autosaving (e.g. the load-race
+// bug that originally caused a full wipe). Not a precise metric — just a
+// tripwire.
+function countItems(s) {
+  const ta = (s.ta||[]).length;
+  const za = (s.za||[]).reduce((n,w)=>n+(w?w.length:0),0);
+  const rec = (s.recurring||[]).length;
+  const z = (s.z||[]).filter(e=>e.text&&e.text.trim()).length;
+  const impulse = (s.impulse||[]).filter(e=>e.text&&e.text.trim()).length;
+  const paDefs = (s.paDefs||[]).length;
+  const projekte = (s.projekte||[]).length;
+  return ta+za+rec+z+impulse+paDefs+projekte;
 }
 
 // ── Helpers ──
@@ -327,6 +381,57 @@ function Toast({message}) {
       {message}
     </div>
   ):null;
+}
+
+function BackupModal({ open, onClose, onRestored }) {
+  const [list, setList] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(()=>{
+    if (!open) { setList(null); return; }
+    let cancelled = false;
+    fetchBackupList().then(res=>{ if (!cancelled) setList(res); });
+    return ()=>{ cancelled = true; };
+  },[open]);
+
+  async function restore(id) {
+    if (!window.confirm(`Stand vom ${id} wiederherstellen? Der aktuelle Stand wird dabei überschrieben.`)) return;
+    setBusyId(id);
+    const restored = await fetchBackupState(id);
+    setBusyId(null);
+    if (!restored) { alert('Backup konnte nicht geladen werden.'); return; }
+    onRestored(restored);
+    onClose();
+  }
+
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(26,26,24,0.6)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'var(--paper)',border:'1.5px solid var(--ink)',padding:24,minWidth:300,maxWidth:420,width:'90%',maxHeight:'70vh',overflowY:'auto',boxShadow:'0 2px 20px rgba(26,26,24,0.15)'}}>
+        <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.1rem',marginBottom:16,color:'var(--ink)',borderBottom:'1px solid var(--border)',paddingBottom:10}}>
+          Backup-Verlauf
+        </div>
+        {list===null && <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',textAlign:'center',padding:20}}>Lädt…</div>}
+        {list && list.length===0 && <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.7rem',color:'var(--ink-faint)',textAlign:'center',padding:20}}>Noch keine Backups vorhanden.</div>}
+        {list && list.length>0 && (
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {list.map(b=>(
+              <div key={b.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 10px',border:'1px solid var(--border)',borderRadius:2}}>
+                <div style={{flex:1,fontFamily:"'DM Mono',monospace",fontSize:'0.72rem',color:'var(--ink)'}}>{b.id}</div>
+                <button onClick={()=>restore(b.id)} disabled={busyId===b.id}
+                  style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.08em',padding:'5px 12px',border:'1.5px solid var(--gold)',background:'transparent',color:'var(--gold)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                  {busyId===b.id?'…':'Wiederherstellen'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{display:'flex',justifyContent:'flex-end',marginTop:18}}>
+          <Btn onClick={onClose}>Schließen</Btn>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function SyncBadge({ status }) {
@@ -893,10 +998,14 @@ function App() {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const saveTimer = useRef(null);
+  const [showBackups, setShowBackups] = useState(false);
+  const importInputRef = useRef(null);
 
   function showToast(msg) { setToast(msg); setTimeout(()=>setToast(''),2500); }
 
   const suppressIncoming = useRef(false);
+  const lastGoodCount = useRef(null);
+  const lastBackupDate = useRef(null);
 
   useEffect(()=>{
     function setup() {
@@ -909,6 +1018,7 @@ function App() {
             const incoming = JSON.parse(snap.data().stateJson);
             migrateState(incoming);
             setStateRaw(incoming);
+            lastGoodCount.current = countItems(incoming);
             setLoadError(false);
             setLoaded(true);
             setSyncStatus('saved');
@@ -923,6 +1033,7 @@ function App() {
           }
         } else {
           // Document genuinely doesn't exist yet — legitimate first-ever run.
+          lastGoodCount.current = 0;
           setLoadError(false);
           setLoaded(true);
           setSyncStatus('saved');
@@ -949,13 +1060,28 @@ function App() {
 
   useEffect(()=>{
     if (!loaded) return;
+    const currentCount = countItems(state);
+    const prev = lastGoodCount.current;
+    if (prev !== null && prev >= 5 && currentCount <= prev * 0.3) {
+      const proceed = window.confirm(
+        `Warnung: Die Datenmenge ist stark gesunken (von ${prev} auf ${currentCount} Einträgen). ` +
+        `Speichern und den Cloud-Stand überschreiben? Falls das unerwartet ist, klicke Abbrechen und prüfe die App zuerst.`
+      );
+      if (!proceed) return; // skip this autosave cycle entirely; nothing gets overwritten
+    }
     setSyncStatus('syncing');
     suppressIncoming.current = true;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async ()=>{
       await fbSave(state);
+      lastGoodCount.current = currentCount;
       setSyncStatus('saved');
       setTimeout(()=>{ suppressIncoming.current = false; }, 2000);
+      const todayStr = new Date().toISOString().slice(0,10);
+      if (lastBackupDate.current !== todayStr) {
+        lastBackupDate.current = todayStr;
+        runDailyBackup(state);
+      }
     }, 1500);
   },[state, loaded]);
 
@@ -997,6 +1123,41 @@ function App() {
     showToast('Aufgabe gespeichert');
   }
 
+  function exportBackup() {
+    const blob = new Blob([JSON.stringify(state, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mrb-planner-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Backup heruntergeladen');
+  }
+
+  function handleImportFile(e) {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try { parsed = JSON.parse(reader.result); }
+      catch(err) { alert('Datei konnte nicht gelesen werden — ist es eine gültige Backup-Datei?'); return; }
+      migrateState(parsed);
+      if (!window.confirm('Aktuellen Stand mit dieser Backup-Datei überschreiben?')) return;
+      lastGoodCount.current = countItems(parsed);
+      setStateRaw(parsed);
+      showToast('Backup importiert');
+    };
+    reader.readAsText(file);
+  }
+
+  function handleRestoredFromHistory(restored) {
+    lastGoodCount.current = countItems(restored);
+    setStateRaw(restored);
+    showToast('Backup wiederhergestellt');
+  }
+
   const now=new Date();
   const dayNames=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
   const TABS=[
@@ -1036,8 +1197,23 @@ function App() {
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.25rem',letterSpacing:'0.02em'}}>Mr. B's Methode</div>
             <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.62rem',letterSpacing:'0.18em',color:'var(--ink-faint)',textTransform:'uppercase',marginTop:2}}>Digital · Planner</div>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:16}}>
+          <div style={{display:'flex',alignItems:'center',gap:14}}>
             <SyncBadge status={syncStatus}/>
+            <div style={{display:'flex',gap:6}}>
+              <button onClick={()=>setShowBackups(true)} title="Backup-Verlauf (Cloud, letzte 30 Tage)"
+                style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',letterSpacing:'0.06em',padding:'4px 9px',border:'1px solid var(--ink-faint)',background:'transparent',color:'var(--ink-faint)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                Verlauf
+              </button>
+              <button onClick={exportBackup} title="Aktuellen Stand als Datei herunterladen"
+                style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',letterSpacing:'0.06em',padding:'4px 9px',border:'1px solid var(--ink-faint)',background:'transparent',color:'var(--ink-faint)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                ⬇ Backup
+              </button>
+              <button onClick={()=>importInputRef.current&&importInputRef.current.click()} title="Aus Backup-Datei wiederherstellen"
+                style={{fontFamily:"'DM Mono',monospace",fontSize:'0.6rem',letterSpacing:'0.06em',padding:'4px 9px',border:'1px solid var(--ink-faint)',background:'transparent',color:'var(--ink-faint)',cursor:'pointer',borderRadius:2,textTransform:'uppercase'}}>
+                ⬆ Import
+              </button>
+              <input ref={importInputRef} type="file" accept="application/json" onChange={handleImportFile} style={{display:'none'}}/>
+            </div>
             <div style={{fontFamily:"'DM Mono',monospace",fontSize:'0.75rem',color:'var(--ink-faint)',letterSpacing:'0.08em',textAlign:'right'}}>
               <span style={{fontSize:'1.1rem',color:'var(--paper)',fontWeight:500,display:'block'}}>{dayNames[now.getDay()]}</span>
               {fmtDate(now)}
@@ -1062,6 +1238,7 @@ function App() {
         {tab==='pr'&&<ProjektePanel state={state} dispatch={dispatch}/>}
       </div>
       <AddTaskModal open={!!modal} target={modal} onClose={()=>setModal(null)} onSave={saveTask} projekte={state.projekte||[]}/>
+      <BackupModal open={showBackups} onClose={()=>setShowBackups(false)} onRestored={handleRestoredFromHistory}/>
       <Toast message={toast}/>
     </div>
   );
